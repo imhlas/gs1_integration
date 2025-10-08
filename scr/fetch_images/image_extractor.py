@@ -1,4 +1,4 @@
-# image_extractor.py
+# file: image_extractor.py
 from dataclasses import dataclass
 import mimetypes
 import requests

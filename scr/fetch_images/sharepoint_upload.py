@@ -1,7 +1,6 @@
-# sharepoint_upload.py
-from typing import Optional, Sequence, Dict
-from urllib.parse import quote, urlparse
-from collections import defaultdict
+# file: sharepoint_upload.py
+from typing import Optional, Sequence, Dict, Tuple
+from urllib.parse import urlparse, quote
 import os
 import re
 
@@ -10,6 +9,24 @@ import requests
 
 from image_extractor import ImageExtractor, ItemImage
 from delta_images import get_image_rows
+
+
+# ---------------- PIKKUAPURI: normalisointi sarakenimille ----------------
+
+def _norm(s: Optional[str]) -> str:
+    """
+    Normalisoi sarakenimen vertailua varten:
+    - lower-case
+    - trimmaa whitespace (myös non-breaking space)
+    - korvaa kaikki yleiset viivat yhdenmukaiseksi '-'
+    """
+    if not s:
+        return ""
+    x = s.replace("\u00A0", " ")   # non-breaking space -> space
+    for ch in ["\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212", "\u00AD"]:
+        x = x.replace(ch, "-")
+    x = re.sub(r"\s+", " ", x).strip().lower()
+    return x
 
 
 # ---------------- GRAPH HELPERS ----------------
@@ -46,6 +63,15 @@ def _graph_post(url: str, token: str, json_body: dict):
         raise RuntimeError(f"POST {url} -> {r.status_code}: {r.text}")
     return r.json()
 
+def _graph_patch(url: str, token: str, json_body: dict):
+    r = requests.patch(url, json=json_body, headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    })
+    if not r.ok:
+        raise RuntimeError(f"PATCH {url} -> {r.status_code}: {r.text}")
+    return r.json() if r.text else {}
+
 def _graph_put_bytes(url: str, token: str, content: bytes):
     r = requests.put(url, data=content, headers={"Authorization": f"Bearer {token}"})
     if not r.ok:
@@ -53,17 +79,26 @@ def _graph_put_bytes(url: str, token: str, content: bytes):
     return r.json()
 
 def _get_site(token: str, site_url: str, graph_base: str, hostname: str) -> dict:
-    # SITE_URL: https://{hostname}/sites/Insights  -> "sites/Insights"
     path_part = site_url.split("://", 1)[-1].split("/", 1)[-1]
     url = f"{graph_base}/sites/{hostname}:/{path_part}"
     return _graph_get(url, token)
 
-def _get_drive(token: str, site_id: str, graph_base: str) -> dict:
-    url = f"{graph_base}/sites/{site_id}/drive"
-    return _graph_get(url, token)
+def _list_site_drives(token: str, site_id: str, graph_base: str) -> list:
+    url = f"{graph_base}/sites/{site_id}/drives"
+    data = _graph_get(url, token)
+    return data.get("value", [])
+
+def _get_drive_by_name(token: str, site_id: str, library_name: str, graph_base: str) -> dict:
+    drives = _list_site_drives(token, site_id, graph_base)
+    for d in drives:
+        if _norm(d.get("name")) == _norm(library_name):
+            return d
+    raise RuntimeError(f"Drive (kirjasto) nimellä '{library_name}' ei löytynyt sivulta {site_id}")
 
 def _ensure_folder_path(token: str, drive_id: str, folder_path: str, graph_base: str):
-    # Luo puuttuvan polun segmentti kerrallaan
+    if not folder_path or not folder_path.strip():
+        return
+
     parts = [p for p in folder_path.strip("/").split("/") if p]
     cur = ""
     for p in parts:
@@ -86,46 +121,54 @@ def _ensure_folder_path(token: str, drive_id: str, folder_path: str, graph_base:
         elif not resp.ok:
             raise RuntimeError(f"Check folder {cur} -> {resp.status_code}: {resp.text}")
 
-def _upload_file(token: str, drive_id: str, target_path: str, filename: str, content: bytes, graph_base: str):
-    full_path = f"{target_path.rstrip('/')}/{filename}"
+def _upload_file(token: str, drive_id: str, target_subfolder: str, filename: str, content: bytes, graph_base: str) -> dict:
+    full_path = f"{target_subfolder.rstrip('/')}/{filename}" if target_subfolder and target_subfolder.strip() else filename
     url = f"{graph_base}/drives/{drive_id}/root:/{quote(full_path)}:/content"
-    _graph_put_bytes(url, token, content)
+    return _graph_put_bytes(url, token, content)
 
-def _list_children(token: str, drive_id: str, parent_path: str, graph_base: str) -> Dict[str, dict]:
+def _get_list_for_drive(token: str, drive_id: str, graph_base: str) -> dict:
+    url = f"{graph_base}/drives/{drive_id}/list"
+    return _graph_get(url, token)
+
+def _get_columns_for_list(token: str, site_id: str, list_id: str, graph_base: str) -> Dict[str, Tuple[str, str]]:
     """
-    Palauttaa dictin: nimi -> item-objekti, parent_pathin suorat lapset.
+    Palauttaa: displayName -> (id, internalName)
     """
-    if parent_path:
-        url = f"{graph_base}/drives/{drive_id}/root:/{quote(parent_path)}:/children"
-    else:
-        url = f"{graph_base}/drives/{drive_id}/root/children"
+    url = f"{graph_base}/sites/{site_id}/lists/{list_id}/columns"
     data = _graph_get(url, token)
-    items = data.get("value", [])
-    return {it["name"]: it for it in items}
+    cols = {}
+    for col in data.get("value", []):
+        display = col.get("displayName")
+        internal = col.get("name")
+        cid = col.get("id")
+        if display and internal:
+            cols[display] = (cid, internal)
+    return cols
 
-# ---------------- JULKINEN UPLOAD-API ----------------
+def _find_internal_by_display(cols: Dict[str, Tuple[str, str]], target_display: str) -> Optional[Tuple[str, str]]:
+    if target_display in cols:
+        return cols[target_display]
+    norm_target = _norm(target_display)
+    for disp, pair in cols.items():
+        if _norm(disp) == norm_target:
+            return pair
+    return None
 
-def upload_to_sharepoint_via_graph(
-    filename: str,
-    content: bytes,
-    *,
-    site_url: str,
-    tenant_id: str,
-    client_id: str,
-    client_secret: str,
-    scope: Sequence[str],
+def _update_item_metadata_generic(
+    token: str,
+    drive_id: str,
+    item_id: str,
+    fields_body: Dict[str, str],
     graph_base: str,
-    hostname: str,
-    target_path: str,
-) -> None:
-    token = _acquire_graph_token(client_id, client_secret, tenant_id, scope)
-    site  = _get_site(token, site_url, graph_base, hostname)
-    drive = _get_drive(token, site["id"], graph_base)
-    _ensure_folder_path(token, drive["id"], target_path, graph_base)
-    _upload_file(token, drive["id"], target_path, filename, content, graph_base)
-    print(f"✅ Kuva tallennettu: {target_path}/{filename}")
-
-# ---------------- BATCH-AJO ----------------
+):
+    """
+    Päivittää ladatun tiedoston metatiedot (ListItem/fields).
+    fields_body: { internalName: value, ... }
+    """
+    if not fields_body:
+        return
+    url = f"{graph_base}/drives/{drive_id}/items/{item_id}/listItem/fields"
+    _graph_patch(url, token, fields_body)
 
 def _filename_from_url(url: str) -> Optional[str]:
     try:
@@ -135,26 +178,8 @@ def _filename_from_url(url: str) -> Optional[str]:
     except Exception:
         return None
 
-def _build_code_to_folder_map(
-    token: str,
-    drive_id: str,
-    base_path: str,
-    graph_base: str,
-) -> Dict[str, str]:
-    """
-    Lukee base_pathin suorat alikansiot ja muodostaa mapin:
-      '^\d+' (prefix-numero) -> 'kansion koko nimi'
-    """
-    children = _list_children(token, drive_id, base_path, graph_base)
-    code_map: Dict[str, str] = {}
-    for folder_name, item in children.items():
-        # Kiinnostaa vain kansiot
-        if "folder" not in item:
-            continue
-        m = re.match(r"^(\d+)", folder_name)
-        if m:
-            code_map[m.group(1)] = folder_name
-    return code_map
+
+# ---------------- BATCH-AJO ----------------
 
 def process_batch(
     spark,
@@ -168,77 +193,127 @@ def process_batch(
     scope: Sequence[str],
     graph_base: str,
     hostname: str,
-    target_path: str,
-    unmatched_folder_name: str,
+    target_library_name: str,
+    target_subfolder: str,
+    ean_display_name: str,
+    gpc1_display_name: str,
+    gpc2_display_name: str,
+    brand_display_name: str,
 ) -> None:
     """
-    Lukee Delta-polusta max 'limit' riviä, hakee kuvat ja lataa SharePointiin
-    GpcFamilyCode-pohjaiseen alikansioon. Jos vastaavaa kansiota ei löydy,
-    viedään kansioon 'unmatched_folder_name'. Tulostaa yhteenvedon mihin ja
-    montako kuvaa meni.
+    Lukee Delta-polusta max 'limit' riviä, hakee kuvat ja lataa ne SharePointin
+    dokumenttikirjastoon. Päivittää metatiedot:
+      - EAN            ← GTIN
+      - GS1-kategoria1 ← GpcFamilyCode
+      - GS1-kategoria2 ← GpcClassCode
+      - BRAND          ← BrandName
     """
-    # 1) Token + drive + varmista base-kansio
+    # 1) Graph + kirjasto
     token = _acquire_graph_token(client_id, client_secret, tenant_id, scope)
     site  = _get_site(token, site_url, graph_base, hostname)
-    drive = _get_drive(token, site["id"], graph_base)
-    _ensure_folder_path(token, drive["id"], target_path, graph_base)
+    drive = _get_drive_by_name(token, site["id"], target_library_name, graph_base)
 
-    # 2) Rakenna koodikartta SharePointin alikansioista (vain kerran)
-    code_to_folder = _build_code_to_folder_map(token, drive["id"], target_path, graph_base)
+    # 2) Alikansion varmistus (jos annettu)
+    _ensure_folder_path(token, drive["id"], target_subfolder, graph_base)
 
-    # 3) Varmista että fallback-kansio on olemassa
-    fallback_path = f"{target_path.rstrip('/')}/{unmatched_folder_name}"
-    _ensure_folder_path(token, drive["id"], fallback_path, graph_base)
+    # 3) Listan sarakkeet → poimi sisäiset nimet
+    lst   = _get_list_for_drive(token, drive["id"], graph_base)
+    cols  = _get_columns_for_list(token, site["id"], lst["id"], graph_base)
 
-    # 4) Lue rivit Delasta
+    ean_pair   = _find_internal_by_display(cols, ean_display_name)
+    gpc1_pair  = _find_internal_by_display(cols, gpc1_display_name)
+    gpc2_pair  = _find_internal_by_display(cols, gpc2_display_name)
+    brand_pair = _find_internal_by_display(cols, brand_display_name)
+
+    missing = []
+    if not ean_pair:   missing.append(f"'{ean_display_name}'")
+    if not gpc1_pair:  missing.append(f"'{gpc1_display_name}'")
+    if not gpc2_pair:  missing.append(f"'{gpc2_display_name}'")
+    if not brand_pair: missing.append(f"'{brand_display_name}'")
+    if missing:
+        available = ", ".join(sorted(cols.keys()))
+        raise RuntimeError(
+            "Metatietokenttiä ei löytynyt: "
+            + " ja ".join(missing)
+            + f". Saatavilla olevat (displayName): {available}"
+        )
+
+    _, ean_internal   = ean_pair
+    _, gpc1_internal  = gpc1_pair
+    _, gpc2_internal  = gpc2_pair
+    _, brand_internal = brand_pair
+
+    # 4) Lue rivit Deltasta
     rows = get_image_rows(spark, curated_items_path, limit=limit)
     extractor = ImageExtractor(timeout_sec=30)
 
-    # 5) Laskurit
-    per_folder_counts = defaultdict(int)
     ok, fail = 0, 0
 
+    # 5) Käy rivit läpi
     for r in rows:
-        url  = (r.get("PrimaryImageUrl") or "").strip()
-        name = (r.get("PrimaryImageFileName") or "").strip()
-        code = (str(r.get("GpcFamilyCode") or "").strip())
+        url    = (r.get("PrimaryImageUrl") or "").strip()
+        name   = (r.get("PrimaryImageFileName") or "").strip()
+        gpc1   = (str(r.get("GpcFamilyCode") or "").strip())
+        gpc2   = (str(r.get("GpcClassCode") or "").strip())
+        brand  = (r.get("BrandName") or "").strip()
+        gtin   = (str(r.get("GTIN") or "").strip())
 
         if not url:
             print("⚠️ Ohitetaan: tyhjä URL")
             continue
 
-        # Päätä kohde-alikansio SharePointissa
-        subfolder = code_to_folder.get(code, unmatched_folder_name)
-        target_subpath = f"{target_path.rstrip('/')}/{subfolder}"
+        # EAN/GTIN ensisijaisesti Deltasta
+        base_gtin = gtin
 
-        # ItemImage tarvitsee gtin & gpc_family_code (ei kriittisiä uploadiin)
-        item = ItemImage(
-            gpc_family_code=code,
-            gtin=(os.path.splitext(name)[0] or code or ""),
-            url=url,
-        )
+        # Fallback, jos GTIN puuttuu: tiedostonimen runko → lopulta gpc1
+        if not base_gtin:
+            if name:
+                base_gtin = re.sub(r"\.[^.]+$", "", name).strip()
+            if not base_gtin:
+                base_gtin = gpc1 or "unknown"
+
+        # Jos tiedostonimi puuttuu, yritä tulkita se URL:ista
+        if not name:
+            url_name = _filename_from_url(url)
+            name = url_name if url_name else f"{base_gtin}.jpg"
 
         try:
+            # Lataa kuva
+            item = ItemImage(gpc_family_code=gpc1, gtin=base_gtin, url=url)
             blob = extractor.fetch(item)
 
-            # Fallback tiedostonimelle jos puuttuu
-            if not name:
-                url_name = _filename_from_url(url)
-                name = url_name if url_name else f"{(item.gtin or 'unknown')}{blob.extension}"
+            # Varmista tiedostopääte
+            if not re.search(r"\.(jpg|jpeg|png|webp|gif|bmp|tif|tiff)$", name, flags=re.IGNORECASE):
+                name = re.sub(r"\.[^.]+$", "", name) + blob.extension
 
-            # Lataa kuvan oikeaan alikansioon
-            _upload_file(token, drive["id"], target_subpath, name, blob.content, graph_base)
+            # Upload
+            drive_item = _upload_file(token, drive["id"], target_subfolder, name, blob.content, graph_base)
+            item_id = drive_item.get("id")
+            if not item_id:
+                raise RuntimeError("Upload onnistui, mutta item-id puuttuu vastauksesta.")
+
+            # Metatiedot (päivitä vain ei-tyhjät)
+            fields = {}
+            if base_gtin: fields[ean_internal] = base_gtin
+            if gpc1:      fields[gpc1_internal] = gpc1
+            if gpc2:      fields[gpc2_internal] = gpc2
+            if brand:     fields[brand_internal] = brand
+
+            _update_item_metadata_generic(
+                token=token,
+                drive_id=drive["id"],
+                item_id=item_id,
+                fields_body=fields,
+                graph_base=graph_base,
+            )
 
             ok += 1
-            per_folder_counts[subfolder] += 1
+            print(f"✅ Tiedosto tallennettu ja metatiedot päivitetty: {name}")
+
         except Exception as e:
             print(f"❌ Epäonnistui: {name or '(no name)'} ({url}) -> {e}")
             fail += 1
 
     # 6) Yhteenveto
     print(f"Valmis. Onnistui: {ok}, epäonnistui: {fail}, yhteensä: {ok + fail}")
-    if per_folder_counts:
-        print("Kansiokohtainen yhteenveto (vain kansiot joihin meni kuvia):")
-        for folder_name, cnt in per_folder_counts.items():
-            print(f" - {folder_name}: {cnt} kpl")
 
