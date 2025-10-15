@@ -9,7 +9,8 @@ def get_image_rows(spark, curated_items_path: str, limit: int = 10) -> List[Dict
     BASE_UNIT_OR_EACH + ei-NULL/ei-tyhjät URLit, ja palauttaa listan rivejä.
     Palauttaa kentät:
       PrimaryImageUrl, PrimaryImageFileName,
-      GpcFamilyCode, GpcClassCode, BrandName, GTIN
+      GpcFamilyCode, GpcClassCode, BrandName, GTIN, PRODUCT_HIERARCHY_LEVEL_2,
+      PRODUCT_HIERARCHY_LEVEL_3, PRODUCT_HIERARCHY_LEVEL_4
     """
     df = (
         spark.read.format("delta").load(curated_items_path)
@@ -22,6 +23,9 @@ def get_image_rows(spark, curated_items_path: str, limit: int = 10) -> List[Dict
             "GpcClassCode",
             "BrandName",
             "GTIN",
+            "PRODUCT_HIERARCHY_LEVEL_2",
+            "PRODUCT_HIERARCHY_LEVEL_3",
+            "PRODUCT_HIERARCHY_LEVEL_4"
         )
         .limit(limit)
     )

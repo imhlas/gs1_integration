@@ -16,6 +16,7 @@ def ABFSS(path: str) -> str:
 DELTA_KEYS     = ABFSS("gs1/bronze/public_item_sync")
 DELTA_PRODUCTS = ABFSS("gs1/silver/catalogue_items")
 CURATED_ITEMS  = ABFSS("gs1/curated/items_selected_fields")
+CURATED_ITEMS_WITH_KESKO = ABFSS("gs1/gold/items_with_kesko_levels")
 
 # Ajoasetukset
 RUN_MODE = "changes"  # "full" tai "changes"
@@ -25,6 +26,7 @@ RATE_LIMIT_PER_MIN = 15
 
 # SQL-kohdetaulu (pidä sama nimi kirjoituksessa ja luvussa)
 SQL_TABLE_CURATED_ITEMS = "dbo.Test_Curated_Items"
+SQL_TABLE_KESKO_CATEGORIES = "dbo.product_data_with_kesko"
 
 # (valinnainen) Spark-lippu jonka voit lukea ja asettaa run_allissa
 SPARK_DELTA_AUTOMERGE = True

@@ -1,5 +1,6 @@
 # file: main.py
 from sharepoint_upload import process_batch
+from src.config import *
 
 def main():
     # 🔐 Salaisuudet ja kovakoodit
@@ -17,19 +18,14 @@ def main():
     TARGET_LIBRARY_NAME = "GS1 Tuotekuvat"
     TARGET_SUBFOLDER    = ""  # esim. "Tuotteet/2025" tai "" kirjaston juureen
 
-    # 🔎 Delta-polku
-    account    = "gs1datalake"
-    container  = "datalake"
-    access_key = "5kEehpTCdCfzcmwOzmq+w4iaiFeMGnfV2OCaxQlGut2kb65ItOD4QDWapkmcT/NI4t8sLaOFAbjL+AStaIorWg=="
-
-    spark.conf.set(f"fs.azure.account.key.{account}.dfs.core.windows.net", access_key)
-    CURATED_ITEMS = f"abfss://{container}@{account}.dfs.core.windows.net/gs1/curated/items_selected_fields"
+    access_key = dbutils.secrets.get("gs1-kv", "storage-access-key")
+    spark.conf.set(f"fs.azure.account.key.{ACCOUNT}.dfs.core.windows.net", access_key)
 
     # ▶️ Aja pieni erä testausta varten
     process_batch(
         spark,
-        CURATED_ITEMS,
-        limit=20,
+        curated_items_path=CURATED_ITEMS_WITH_KESKO,
+        limit=1000,
         site_url=SITE_URL,
         tenant_id=TENANT_ID,
         client_id=CLIENT_ID,
@@ -38,12 +34,16 @@ def main():
         graph_base=GRAPH_BASE,
         hostname=HOSTNAME,
         target_library_name=TARGET_LIBRARY_NAME,
-        target_subfolder=TARGET_SUBFOLDER,  # "" = kirjaston juuri
+        target_subfolder=TARGET_SUBFOLDER,
         ean_display_name="EAN",
         gpc1_display_name="GS1-kategoria1",
         gpc2_display_name="GS1-kategoria2",
         brand_display_name="BRAND",
+        kesko1_display_name="Kesko-kategoria1",  
+        kesko2_display_name="Kesko-kategoria2", 
+        kesko3_display_name="Kesko-kategoria3",  
     )
+
 
 if __name__ == "__main__":
     main()

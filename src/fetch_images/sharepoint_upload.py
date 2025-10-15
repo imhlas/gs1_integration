@@ -178,7 +178,6 @@ def _filename_from_url(url: str) -> Optional[str]:
     except Exception:
         return None
 
-
 # ---------------- BATCH-AJO ----------------
 
 def process_batch(
@@ -199,14 +198,19 @@ def process_batch(
     gpc1_display_name: str,
     gpc2_display_name: str,
     brand_display_name: str,
+    # UUTTA: Kesko-kategoriat (SharePointin sarakkeiden näyttönimet)
+    kesko1_display_name: str = "Kesko-kategoria1",
+    kesko2_display_name: str = "Kesko-kategoria2",
+    kesko3_display_name: str = "Kesko-kategoria3",
 ) -> None:
     """
     Lukee Delta-polusta max 'limit' riviä, hakee kuvat ja lataa ne SharePointin
     dokumenttikirjastoon. Päivittää metatiedot:
-      - EAN            ← GTIN
-      - GS1-kategoria1 ← GpcFamilyCode
-      - GS1-kategoria2 ← GpcClassCode
-      - BRAND          ← BrandName
+      - EAN                 ← GTIN
+      - GS1-kategoria1      ← GpcFamilyCode
+      - GS1-kategoria2      ← GpcClassCode
+      - BRAND               ← BrandName
+      - Kesko-kategoria1..3 ← PRODUCT_HIERARCHY_LEVEL_2/3/4
     """
     # 1) Graph + kirjasto
     token = _acquire_graph_token(client_id, client_secret, tenant_id, scope)
@@ -220,16 +224,22 @@ def process_batch(
     lst   = _get_list_for_drive(token, drive["id"], graph_base)
     cols  = _get_columns_for_list(token, site["id"], lst["id"], graph_base)
 
-    ean_pair   = _find_internal_by_display(cols, ean_display_name)
-    gpc1_pair  = _find_internal_by_display(cols, gpc1_display_name)
-    gpc2_pair  = _find_internal_by_display(cols, gpc2_display_name)
-    brand_pair = _find_internal_by_display(cols, brand_display_name)
+    ean_pair    = _find_internal_by_display(cols, ean_display_name)
+    gpc1_pair   = _find_internal_by_display(cols, gpc1_display_name)
+    gpc2_pair   = _find_internal_by_display(cols, gpc2_display_name)
+    brand_pair  = _find_internal_by_display(cols, brand_display_name)
+    kesko1_pair = _find_internal_by_display(cols, kesko1_display_name)
+    kesko2_pair = _find_internal_by_display(cols, kesko2_display_name)
+    kesko3_pair = _find_internal_by_display(cols, kesko3_display_name)
 
     missing = []
-    if not ean_pair:   missing.append(f"'{ean_display_name}'")
-    if not gpc1_pair:  missing.append(f"'{gpc1_display_name}'")
-    if not gpc2_pair:  missing.append(f"'{gpc2_display_name}'")
-    if not brand_pair: missing.append(f"'{brand_display_name}'")
+    if not ean_pair:    missing.append(f"'{ean_display_name}'")
+    if not gpc1_pair:   missing.append(f"'{gpc1_display_name}'")
+    if not gpc2_pair:   missing.append(f"'{gpc2_display_name}'")
+    if not brand_pair:  missing.append(f"'{brand_display_name}'")
+    if not kesko1_pair: missing.append(f"'{kesko1_display_name}'")
+    if not kesko2_pair: missing.append(f"'{kesko2_display_name}'")
+    if not kesko3_pair: missing.append(f"'{kesko3_display_name}'")
     if missing:
         available = ", ".join(sorted(cols.keys()))
         raise RuntimeError(
@@ -238,10 +248,13 @@ def process_batch(
             + f". Saatavilla olevat (displayName): {available}"
         )
 
-    _, ean_internal   = ean_pair
-    _, gpc1_internal  = gpc1_pair
-    _, gpc2_internal  = gpc2_pair
-    _, brand_internal = brand_pair
+    _, ean_internal    = ean_pair
+    _, gpc1_internal   = gpc1_pair
+    _, gpc2_internal   = gpc2_pair
+    _, brand_internal  = brand_pair
+    _, kesko1_internal = kesko1_pair
+    _, kesko2_internal = kesko2_pair
+    _, kesko3_internal = kesko3_pair
 
     # 4) Lue rivit Deltasta
     rows = get_image_rows(spark, curated_items_path, limit=limit)
@@ -258,6 +271,11 @@ def process_batch(
         brand  = (r.get("BrandName") or "").strip()
         gtin   = (str(r.get("GTIN") or "").strip())
 
+        # Kesko-tasot Deltasta
+        kesko1 = (r.get("PRODUCT_HIERARCHY_LEVEL_2") or "").strip()
+        kesko2 = (r.get("PRODUCT_HIERARCHY_LEVEL_3") or "").strip()
+        kesko3 = (r.get("PRODUCT_HIERARCHY_LEVEL_4") or "").strip()
+
         if not url:
             print("⚠️ Ohitetaan: tyhjä URL")
             continue
@@ -265,7 +283,7 @@ def process_batch(
         # EAN/GTIN ensisijaisesti Deltasta
         base_gtin = gtin
 
-        # Fallback, jos GTIN puuttuu: tiedostonimen runko → lopulta gpc1
+        # Fallback, jos GTIN puuttuu
         if not base_gtin:
             if name:
                 base_gtin = re.sub(r"\.[^.]+$", "", name).strip()
@@ -298,6 +316,9 @@ def process_batch(
             if gpc1:      fields[gpc1_internal] = gpc1
             if gpc2:      fields[gpc2_internal] = gpc2
             if brand:     fields[brand_internal] = brand
+            if kesko1:    fields[kesko1_internal] = kesko1   # ✅ Kesko-kategoria1 (L2)
+            if kesko2:    fields[kesko2_internal] = kesko2   # ✅ Kesko-kategoria2 (L3)
+            if kesko3:    fields[kesko3_internal] = kesko3   # ✅ Kesko-kategoria3 (L4)
 
             _update_item_metadata_generic(
                 token=token,
@@ -316,4 +337,3 @@ def process_batch(
 
     # 6) Yhteenveto
     print(f"Valmis. Onnistui: {ok}, epäonnistui: {fail}, yhteensä: {ok + fail}")
-
