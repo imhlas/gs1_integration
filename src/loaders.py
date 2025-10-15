@@ -1,6 +1,6 @@
 import time, datetime, pandas as pd
 import json
-from scr.endpoints import list_keys_all, list_keys_changes, items_many, next_offset
+from src.endpoints import list_keys_all, list_keys_changes, items_many, next_offset
 
 def fetch_all_keys_to_bronze(spark, client, bronze_path: str, batch_size: int) -> int:
     """

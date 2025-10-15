@@ -3,7 +3,7 @@ from sharepoint_upload import process_batch
 
 def main():
     # 🔐 Salaisuudet ja kovakoodit
-    SITE_URL       = dbutils.secrets.get("gs1-kv", "sharepoint-site-url")        # esim. https://lejosfi.sharepoint.com/sites/Insights
+    SITE_URL       = dbutils.secrets.get("gs1-kv", "sharepoint-site-url")
     CLIENT_ID      = dbutils.secrets.get("gs1-kv", "sharepoint-client-id")
     CLIENT_SECRET  = dbutils.secrets.get("gs1-kv", "sharepoint-client-secret")
 
