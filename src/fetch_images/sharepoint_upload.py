@@ -202,6 +202,7 @@ def process_batch(
     kesko1_display_name: str = "Kesko-kategoria1",
     kesko2_display_name: str = "Kesko-kategoria2",
     kesko3_display_name: str = "Kesko-kategoria3",
+    product_display_name: str = "Tuote",
 ) -> None:
     """
     Lukee Delta-polusta max 'limit' riviä, hakee kuvat ja lataa ne SharePointin
@@ -231,6 +232,7 @@ def process_batch(
     kesko1_pair = _find_internal_by_display(cols, kesko1_display_name)
     kesko2_pair = _find_internal_by_display(cols, kesko2_display_name)
     kesko3_pair = _find_internal_by_display(cols, kesko3_display_name)
+    product_pair = _find_internal_by_display(cols, product_display_name)
 
     missing = []
     if not ean_pair:    missing.append(f"'{ean_display_name}'")
@@ -240,6 +242,7 @@ def process_batch(
     if not kesko1_pair: missing.append(f"'{kesko1_display_name}'")
     if not kesko2_pair: missing.append(f"'{kesko2_display_name}'")
     if not kesko3_pair: missing.append(f"'{kesko3_display_name}'")
+    if not product_pair: missing.append(f"'{product_display_name}'")
     if missing:
         available = ", ".join(sorted(cols.keys()))
         raise RuntimeError(
@@ -255,6 +258,7 @@ def process_batch(
     _, kesko1_internal = kesko1_pair
     _, kesko2_internal = kesko2_pair
     _, kesko3_internal = kesko3_pair
+    _, product_internal = product_pair
 
     # 4) Lue rivit Deltasta
     rows = get_image_rows(spark, curated_items_path, limit=limit)
@@ -275,6 +279,7 @@ def process_batch(
         kesko1 = (r.get("PRODUCT_HIERARCHY_LEVEL_2") or "").strip()
         kesko2 = (r.get("PRODUCT_HIERARCHY_LEVEL_3") or "").strip()
         kesko3 = (r.get("PRODUCT_HIERARCHY_LEVEL_4") or "").strip()
+        product = (r.get("TradeItemDescription_fi") or "").strip()
 
         if not url:
             print("⚠️ Ohitetaan: tyhjä URL")
@@ -319,6 +324,7 @@ def process_batch(
             if kesko1:    fields[kesko1_internal] = kesko1   # ✅ Kesko-kategoria1 (L2)
             if kesko2:    fields[kesko2_internal] = kesko2   # ✅ Kesko-kategoria2 (L3)
             if kesko3:    fields[kesko3_internal] = kesko3   # ✅ Kesko-kategoria3 (L4)
+            if product:   fields[product_internal] = product
 
             _update_item_metadata_generic(
                 token=token,

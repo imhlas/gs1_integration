@@ -1,5 +1,6 @@
 # file: main.py
 from sharepoint_upload import process_batch
+from clean_sharepoint_library import wipe_library
 from src.config import *
 
 def main():
@@ -21,11 +22,11 @@ def main():
     access_key = dbutils.secrets.get("gs1-kv", "storage-access-key")
     spark.conf.set(f"fs.azure.account.key.{ACCOUNT}.dfs.core.windows.net", access_key)
 
-    # ▶️ Aja pieni erä testausta varten
+
     process_batch(
         spark,
         curated_items_path=CURATED_ITEMS_WITH_KESKO,
-        limit=1000,
+        limit=200000,
         site_url=SITE_URL,
         tenant_id=TENANT_ID,
         client_id=CLIENT_ID,
@@ -35,14 +36,28 @@ def main():
         hostname=HOSTNAME,
         target_library_name=TARGET_LIBRARY_NAME,
         target_subfolder=TARGET_SUBFOLDER,
-        ean_display_name="EAN",
-        gpc1_display_name="GS1-kategoria1",
-        gpc2_display_name="GS1-kategoria2",
+       ean_display_name="EAN",
+       gpc1_display_name="GS1-kategoria1",
+       gpc2_display_name="GS1-kategoria2",
         brand_display_name="BRAND",
         kesko1_display_name="Kesko-kategoria1",  
         kesko2_display_name="Kesko-kategoria2", 
-        kesko3_display_name="Kesko-kategoria3",  
+        kesko3_display_name="Kesko-kategoria3", 
+        product_display_name= "Tuote",
     )
+
+  #  wipe_library(
+  #      site_url=SITE_URL,
+  #      tenant_id=TENANT_ID,
+  #      client_id=CLIENT_ID,
+  #      client_secret=CLIENT_SECRET,
+   #     scope=SCOPE,
+   #     graph_base=GRAPH_BASE,
+  #      hostname=HOSTNAME,
+   #     library_name=TARGET_LIBRARY_NAME,
+   #     target_subfolder=TARGET_SUBFOLDER,
+   #     dry_run=False,   # VAROITUS: poistaa oikeasti
+  #  )
 
 
 if __name__ == "__main__":
