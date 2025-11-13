@@ -31,18 +31,15 @@ def kuratoi_ja_talleta_deltaan_like_batch(
     write_mode: str = "overwrite",
     sample_rows: int = 5
 ) -> int:
-    print(">>> Vaihe: Kuratoi tuotteet ja tallenna Deltaan")
 
-    # Lue kaikki Silver-rivit (vain raw_json)
     src_df = (spark.read.format("delta").load(silver_path)
-              .select("raw_json")
-              .filter("raw_json IS NOT NULL"))
+            .select("raw_json", "ingest_ts")
+            .filter("raw_json IS NOT NULL"))
 
     if src_df.rdd.isEmpty():
         print("Silverissä ei ole rivejä. Ei mitään kuratoitavaa.")
         return 0
 
-    # --- Pienet apurit ---
     def get(d, *path, default=None):
         cur = d
         for k in path:
@@ -161,7 +158,7 @@ def kuratoi_ja_talleta_deltaan_like_batch(
 
         return primary["url"], (secondary["url"] if secondary else None), primary["filename"], primary["media_id"]
 
-    def parse_one(raw_json_str):
+    def parse_one(raw_json_str, ingest_ts):
         try:
             data = json.loads(raw_json_str) if isinstance(raw_json_str, str) else {}
         except Exception:
@@ -238,11 +235,11 @@ def kuratoi_ja_talleta_deltaan_like_batch(
 
             "SecondaryImageUrl":         secondary_url,
             
-            # UUSI KENTTÄ: milloin tämä rivi on luotu kuratoinnissa
-            "Lejos_UpdatedAt":                 datetime.datetime.utcnow().isoformat(),
+            "Lejos_UpdatedAt":           ingest_ts,
         }
 
-    curated_rows_rdd = src_df.rdd.map(lambda r: Row(**parse_one(r["raw_json"])))
+    curated_rows_rdd = src_df.rdd.map(
+    lambda r: Row(**parse_one(r["raw_json"], r["ingest_ts"])))
 
     schema = StructType([
         StructField("StartAvailabilityDateTime", StringType(), True),
@@ -279,32 +276,25 @@ def kuratoi_ja_talleta_deltaan_like_batch(
         StructField("Lejos_UpdatedAt",                 StringType(), True),
     ])
 
+    # 1) Luo DataFrame kuratoiduista riveistä
     curated_df = spark.createDataFrame(curated_rows_rdd, schema=schema)
 
-    (curated_df.write
+    # 2) Järjestä siten, että uusin StartAvailabilityDateTime on ensin
+    #    (eli myöhemmin "lanseeratut" rivit tulevat ensimmäiseksi)
+    curated_ordered = curated_df.orderBy("StartAvailabilityDateTime", ascending=False)
+
+    # 3) Poista duplikaatit GTINin perusteella:
+    #    dropDuplicates pitää ensimmäisen rivin → eli uusimman StartAvailabilityDateTime:n
+    dedup_df = curated_ordered.dropDuplicates(["GTIN"])
+
+    (dedup_df.write
         .format("delta")
         .mode(write_mode)
         .option("overwriteSchema", "true")
         .save(curated_path))
 
-    total = curated_df.count()
+    total = dedup_df.count()
     print(f"Kuratoituja rivejä kirjoitettu: {total}")
-
-    print("Esimerkkituotteita curated-taulusta:")
-    (spark.read.format("delta").load(curated_path)
-         .select(
-             "Id",
-             "BrandName",
-             "TradeItemDescription_fi",
-             "GTIN",
-             "GpcSegmentCode",
-             "GpcFamilyCode",
-             "GpcClassCode",
-             "PrimaryImageUrl",
-             "SecondaryImageUrl"
-         )
-         .limit(sample_rows)
-         .show(truncate=False))
 
     return total
 
