@@ -1,5 +1,5 @@
 # file: main.py
-from sharepoint_upload import process_batch
+from sharepoint_upload import process_batch_parallel
 from clean_sharepoint_library import wipe_library
 from src.config import *
 
@@ -23,41 +23,45 @@ def main():
     spark.conf.set(f"fs.azure.account.key.{ACCOUNT}.dfs.core.windows.net", access_key)
 
 
-    process_batch(
-        spark,
-        curated_items_path=CURATED_ITEMS_WITH_KESKO,
-        limit=200000,
-        site_url=SITE_URL,
-        tenant_id=TENANT_ID,
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET,
-        scope=SCOPE,
-        graph_base=GRAPH_BASE,
-        hostname=HOSTNAME,
-        target_library_name=TARGET_LIBRARY_NAME,
-        target_subfolder=TARGET_SUBFOLDER,
-       ean_display_name="EAN",
-       gpc1_display_name="GS1-kategoria1",
-       gpc2_display_name="GS1-kategoria2",
-        brand_display_name="BRAND",
-        kesko1_display_name="Kesko-kategoria1",  
-        kesko2_display_name="Kesko-kategoria2", 
-        kesko3_display_name="Kesko-kategoria3", 
-        product_display_name= "Tuote",
-    )
+    process_batch_parallel(
+    spark,
+    curated_items_path=CURATED_ITEMS_WITH_KESKO,
+    limit=200000,  # tai None = kaikki
+    site_url=SITE_URL,
+    tenant_id=TENANT_ID,
+    client_id=CLIENT_ID,
+    client_secret=CLIENT_SECRET,
+    scope=SCOPE,
+    graph_base=GRAPH_BASE,
+    hostname=HOSTNAME,
+    target_library_name=TARGET_LIBRARY_NAME,
+    target_subfolder=TARGET_SUBFOLDER,
+    ean_display_name="EAN",
+    gpc1_display_name="GS1-kategoria1",
+    gpc2_display_name="GS1-kategoria2",
+    brand_display_name="BRAND",
+    kesko1_display_name="Kesko-kategoria1",
+    kesko2_display_name="Kesko-kategoria2",
+    kesko3_display_name="Kesko-kategoria3",
+    product_display_name="Tuote",
+    max_workers=12,           # aloita 12 → säädä 12–16 välillä
+    image_timeout_sec=12,     # lyhyempi, ettei roiku
+    graph_timeout_sec=25,
+    progress_every=500,       # välikatsaus
+  )
 
-  #  wipe_library(
-  #      site_url=SITE_URL,
-  #      tenant_id=TENANT_ID,
-  #      client_id=CLIENT_ID,
-  #      client_secret=CLIENT_SECRET,
+   # wipe_library(
+   #     site_url=SITE_URL,
+   #     tenant_id=TENANT_ID,
+   #     client_id=CLIENT_ID,
+   #     client_secret=CLIENT_SECRET,
    #     scope=SCOPE,
    #     graph_base=GRAPH_BASE,
-  #      hostname=HOSTNAME,
+   #     hostname=HOSTNAME,
    #     library_name=TARGET_LIBRARY_NAME,
    #     target_subfolder=TARGET_SUBFOLDER,
    #     dry_run=False,   # VAROITUS: poistaa oikeasti
-  #  )
+   # )
 
 
 if __name__ == "__main__":

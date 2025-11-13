@@ -1,15 +1,10 @@
 # file: delta_images.py
 # Vastaa datan (urlien) hausta Deltasta
 
-from typing import List, Dict
+from typing import List, Dict, Iterator, Optional
 
-def get_image_rows(spark, curated_items_path: str, limit: int = 10) -> List[Dict]:
-    """
-    Lukee curated-items -datan annetusta Delta-polusta, suodattaa
-    BASE_UNIT_OR_EACH + ei-tyhjä PrimaryImageUrl + ei-tyhjä Kesko L2,
-    ja palauttaa listan rivejä.
-    """
-    df = (
+def _base_df(spark, curated_items_path: str):
+    return (
         spark.read.format("delta").load(curated_items_path)
         .where("TradeItemUnitDescriptor = 'BASE_UNIT_OR_EACH'")
         .where("PrimaryImageUrl IS NOT NULL AND length(trim(PrimaryImageUrl)) > 0")
@@ -26,6 +21,24 @@ def get_image_rows(spark, curated_items_path: str, limit: int = 10) -> List[Dict
             "PRODUCT_HIERARCHY_LEVEL_3",
             "PRODUCT_HIERARCHY_LEVEL_4"
         )
-        .limit(limit)
     )
+
+def get_image_rows(spark, curated_items_path: str, limit: int = 10) -> List[Dict]:
+    """
+    VANHA: lukee enintään 'limit' riviä ja palauttaa listan (nostaa muistiin).
+    """
+    df = _base_df(spark, curated_items_path).limit(limit)
     return [r.asDict(recursive=True) for r in df.collect()]
+
+def get_image_rows_iter(spark, curated_items_path: str, limit: Optional[int] = None) -> Iterator[Dict]:
+    """
+    UUSI: palauttaa rivit 'streaminä' driverille (ei kerää kaikkia muistiin).
+    - Jos limit annetaan, rajaa siihen; muuten käy läpi kaikki.
+    - Tuottaa sanakirjoja kuten vanha funktio.
+    """
+    df = _base_df(spark, curated_items_path)
+    if limit:
+        df = df.limit(limit)
+    for r in df.toLocalIterator():
+        yield r.asDict(recursive=True)
+
