@@ -1,6 +1,6 @@
 # scr/curate_items.py
 
-import json, re
+import json, re, datetime
 from pyspark.sql import Row
 from pyspark.sql.types import StructType, StructField, StringType, BooleanType
 
@@ -237,6 +237,9 @@ def kuratoi_ja_talleta_deltaan_like_batch(
             "PrimaryImageMediaItemId":   primary_media_id,
 
             "SecondaryImageUrl":         secondary_url,
+            
+            # UUSI KENTTÄ: milloin tämä rivi on luotu kuratoinnissa
+            "Lejos_UpdatedAt":                 datetime.datetime.utcnow().isoformat(),
         }
 
     curated_rows_rdd = src_df.rdd.map(lambda r: Row(**parse_one(r["raw_json"])))
@@ -271,6 +274,9 @@ def kuratoi_ja_talleta_deltaan_like_batch(
         StructField("PrimaryImageMediaItemId",   StringType(), True),
 
         StructField("SecondaryImageUrl",         StringType(), True),
+
+        # UUSI SARAKE: Lejos_UpdatedAt
+        StructField("Lejos_UpdatedAt",                 StringType(), True),
     ])
 
     curated_df = spark.createDataFrame(curated_rows_rdd, schema=schema)
