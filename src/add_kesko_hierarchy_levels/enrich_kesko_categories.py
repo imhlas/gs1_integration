@@ -121,11 +121,6 @@ def enrich_curated_with_kesko_categories(
 
     print(f"Deltaan kirjoitettu rivejä: {rows_written:,}")
     print(f"Kesko-kategorioilla nimettyjä rivejä: {rows_categorized:,} ({rows_categorized/rows_written*100:.1f} %)")
-    print("\nEsimerkkirivejä (5 kpl):")
-    (spark.read.format("delta").load(output_path)
-         .select("Id", "GTIN", "BrandName", "TradeItemDescription_fi", "PRODUCT_HIERARCHY_LEVEL_2", "PRODUCT_HIERARCHY_LEVEL_3", "PRODUCT_HIERARCHY_LEVEL_4")
-         .limit(5)
-         .show(truncate=False))
 
     return {"rows_written": rows_written, "rows_categorized": rows_categorized}
 

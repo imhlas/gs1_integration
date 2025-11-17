@@ -105,6 +105,8 @@ def fetch_items_to_silver_json(
     for start in range(0, len(ids), eff_batch):
         batch_ids = ids[start:start + eff_batch]
 
+        time.sleep(delay_s)
+
         # API-kutsu
         resp = items_many(client, batch_ids)
         items = resp.get("Items") or []
@@ -112,7 +114,6 @@ def fetch_items_to_silver_json(
             print(f"Erä {start // eff_batch + 1}: palautui {len(items)} itemiä")
 
         if not items:
-            time.sleep(delay_s)
             continue
 
         # Muodostetaan rivit: Id + raw_json + ingest_ts (vain suodatetut)

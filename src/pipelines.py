@@ -5,8 +5,9 @@ import datetime
 from src.connection import APIClient
 from src.endpoints import list_keys_all, list_keys_changes, next_offset
 from src.loaders import fetch_all_keys_to_bronze, fetch_items_to_silver_json
+from src.add_kesko_hierarchy_levels.enrich_kesko_categories import enrich_curated_with_kesko_categories
 from src.curate_items import kuratoi_ja_talleta_deltaan_like_batch
-from utils.azuresqlserver import write_overwrite  # tai write_append jos haluat
+from utils.azuresqlserver import write_overwrite  
 from src.config import (
     ACCOUNT,
     DELTA_KEYS,
@@ -100,6 +101,9 @@ def run_full_pipeline(spark, dbutils):
     curated_df = spark.read.format("delta").load(CURATED_ITEMS)
     write_overwrite(curated_df, SQL_TABLE_CURATED_ITEMS, dbutils, truncate=True)
 
+
+    print(">>> Lisätään Kesko-kategoriat")
+    enrich_curated_with_kesko_categories(spark, dbutils)
     print(">>> FULL-ajo valmis.")
 
 
@@ -113,8 +117,6 @@ def run_changes_pipeline(spark, dbutils, since_iso):
     - Kuratoi koko Silver-datan (sis. duplikaattien poiston)
     - Kirjoittaa Curatedin SQL-tauluun (overwrite)
 
-    HUOM: tämä toimii samalla logiikalla kuin nykyinen run_all CHANGES-haara,
-    eli ei vielä tee "oikeaa deltaa" SQL-päässä, vaan aina snapshotin Curatedista.
     """
     print(f">>> CHANGES-ajo käynnissä alkaen {since_iso.split('T', 1)[0]}")
 
@@ -144,7 +146,7 @@ def run_changes_pipeline(spark, dbutils, since_iso):
         offset = next_offset(resp_chg)
         if not offset:
             break
-        time.sleep(1.0)
+        time.sleep(1.5)
 
     print(f"Avaimien (Changes) nouto valmis, avaimia haettu yhteensä: {len(chg_ids)}")
 
@@ -171,8 +173,6 @@ def run_changes_pipeline(spark, dbutils, since_iso):
     silver_df = spark.read.format("delta").load(DELTA_PRODUCTS)
 
     # Rajataan vain rivit, joiden ingest_ts on tämän ajon aloitusajan jälkeen
-    # (huom: ingest_ts ja run_start_ts ovat molemmat ISO-muotoisia merkkijonoja,
-    # jolloin >=-vertailu toimii yhtenevästi)
     new_rows = silver_df.filter(f"ingest_ts >= '{run_start_ts}'")
 
     # Poimitaan GTIN JSON:sta käyttäen SQL-funktioita tekstinä
@@ -205,6 +205,9 @@ def run_changes_pipeline(spark, dbutils, since_iso):
     curated_df = spark.read.format("delta").load(CURATED_ITEMS)
     write_overwrite(curated_df, SQL_TABLE_CURATED_ITEMS, dbutils, truncate=True)
 
+
+    print(">>> Lisätään Kesko-kategoriat")
+    enrich_curated_with_kesko_categories(spark, dbutils)
     print(">>> CHANGES-ajo valmis.")
 
     return updated_gtins

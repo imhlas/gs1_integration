@@ -20,7 +20,7 @@ CURATED_ITEMS_WITH_KESKO = ABFSS("gs1/gold/items_with_kesko_levels")
 
 # Ajoasetukset
 RUN_MODE = "changes"  # "full" tai "changes"
-SINCE_ISO = "2025-11-11T07:03:26.1655687Z"
+SINCE_ISO = "2025-11-15T07:03:26.1655687Z"
 ONLY_GPC_SEGMENT_CODE = "50000000"  # tai None jos ei suodatusta
 RATE_LIMIT_PER_MIN = 15
 
