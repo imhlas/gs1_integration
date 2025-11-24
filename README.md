@@ -107,15 +107,15 @@ Vaihtoehdot:
 
   ```next_offset```
 
-** src/loaders.py**
+**src/loaders.py**
 
 - Varsinainen “latauslogiikka” GS1 → Bronze/Silver:
 
-fetch_all_keys_to_bronze
+```fetch_all_keys_to_bronze```
 
-read_ids_from_bronze
+```read_ids_from_bronze```
 
-fetch_items_to_silver_json (mukaan lukien GPC-segmenttisuodatus)
+```fetch_items_to_silver_json``` (mukaan lukien GPC-segmenttisuodatus)
 
 **src/curate_items.py**
 
