@@ -1,4 +1,4 @@
-# file: clean_sharepoint_library.py
+# fetch_images/clean_sharepoint_library.py
 from typing import Optional, Sequence, Tuple, Dict
 from urllib.parse import quote
 import msal
@@ -160,7 +160,6 @@ def wipe_library(
                     print(f"❌ Virhe poistossa (kansio {name}): {e}")
                     errors += 1
             else:
-                print(f"{prefix}Poistetaan tiedosto: {name} (id={cid})")
                 try:
                     _delete_item_recursive(token, drive["id"], cid, graph_base, dry_run)
                     files_deleted += 1

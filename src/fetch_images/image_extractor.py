@@ -1,5 +1,6 @@
-# file: image_extractor.py
+# src/fetch_images/image_extractor.py
 from dataclasses import dataclass
+from src.config import *
 import mimetypes
 import requests
 

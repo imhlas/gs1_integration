@@ -1,8 +1,9 @@
-# file: sharepoint_upload.py
+# src/fetch_images/sharepoint_upload.py
 # Nopeutettu rinnakkaisajolla, tokenin automaattisella uusinnalla ja retryillä.
 
 from typing import Optional, Sequence, Dict, Tuple, Callable, Any
 from urllib.parse import urlparse, quote
+from src.config import *
 import os
 import re
 import time
@@ -13,8 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import msal
 import requests
 
-from image_extractor import ImageExtractor, ItemImage
-from delta_images import get_image_rows_iter
+from src.fetch_images.image_extractor import ImageExtractor, ItemImage
+from src.fetch_images.delta_images import get_image_rows_iter
 
 
 # ---------------- YLEISAPURI: normalisointi sarakenimille ----------------
@@ -261,7 +262,7 @@ def process_row(
     gpc1    = (str(row.get("GpcFamilyCode") or "").strip())
     gpc2    = (str(row.get("GpcClassCode") or "").strip())
     brand   = (row.get("BrandName") or "").strip()
-    gtin    = (str(row.get("GTIN") or "").strip())
+    gtin    = (str(row.get("GTIN_NO_LEADING_ZEROS") or "").strip())
     kesko1  = (row.get("PRODUCT_HIERARCHY_LEVEL_2") or "").strip()
     kesko2  = (row.get("PRODUCT_HIERARCHY_LEVEL_3") or "").strip()
     kesko3  = (row.get("PRODUCT_HIERARCHY_LEVEL_4") or "").strip()
@@ -445,12 +446,6 @@ def process_batch_parallel(
                 seen = counters["seen"]
             futures.append(pool.submit(wrap_row, row))
 
-            # väli-info
-            if progress_every and (seen % progress_every == 0):
-                elapsed = time.time() - start_ts
-                rate = counters["ok"] / elapsed if elapsed > 0 else 0.0
-                print(f"[progress] seen={seen} ok={counters['ok']} fail={counters['fail']} rate={rate:.2f} ok/s")
-
         # odota valmistuminen
         for f in as_completed(futures):
             _ = f.result()  # nostaa mahdolliset poikkeukset rivikohtaisesti jo laskureihin
@@ -464,3 +459,12 @@ def process_batch_parallel(
     print(f"Epäonnistui:            {counters['fail']}")
     print(f"Kokonaisaika:           {elapsed:.1f} s")
     print(f"Keskinopeus:            {rate:.2f} ok/s  (~{rate*3600:.0f} / h)")
+
+    # Palautetaan statsit kutsujalle
+    return {
+        "seen": counters["seen"],   # rivit jotka yritettiin käsitellä
+        "ok": counters["ok"],       # kuvat jotka päätyivät SharePointiin
+        "fail": counters["fail"],   # rivit joissa lataus / metadata epäonnistui
+        "elapsed_sec": elapsed,
+        "rate_ok_per_sec": rate,
+    }

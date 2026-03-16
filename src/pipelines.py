@@ -6,18 +6,10 @@ from src.connection import APIClient
 from src.endpoints import list_keys_all, list_keys_changes, next_offset
 from src.loaders import fetch_all_keys_to_bronze, fetch_items_to_silver_json
 from src.add_kesko_hierarchy_levels.enrich_kesko_categories import enrich_curated_with_kesko_categories
+from src.fetch_images.sharepoint_upload import process_batch_parallel
 from src.curate_items import kuratoi_ja_talleta_deltaan_like_batch
 from utils.azuresqlserver import write_overwrite  
-from src.config import (
-    ACCOUNT,
-    DELTA_KEYS,
-    DELTA_PRODUCTS,
-    CURATED_ITEMS,
-    RATE_LIMIT_PER_MIN,
-    ONLY_GPC_SEGMENT_CODE,
-    SQL_TABLE_CURATED_ITEMS,
-    SPARK_DELTA_AUTOMERGE,
-)
+from src.config import *
 
 
 # ------------- Yhteiset asetukset / apufunktiot ----------------- #
@@ -56,6 +48,7 @@ def run_full_pipeline(spark, dbutils):
     - Hakee kaikki tuotteet (Bronze → Silver)
     - Kuratoi (Silver → Curated, duplikaattien poisto + Lejos_UpdatedAt)
     - Kirjoittaa Curatedin SQL-tauluun (overwrite)
+    - Rikastaa Kesko-kategorioilla JA kirjoittaa myös ne SQL:ään (overwrite snapshot)
     """
     print(">>> FULL-ajo käynnissä")
 
@@ -103,8 +96,21 @@ def run_full_pipeline(spark, dbutils):
 
 
     print(">>> Lisätään Kesko-kategoriat")
-    enrich_curated_with_kesko_categories(spark, dbutils)
+    kesko_stats = enrich_curated_with_kesko_categories(spark, dbutils)
+
+    print(">>> Kirjoitetaan Kesko-rikastettu data SQL-tauluun (overwrite)")
+    kesko_df = spark.read.format("delta").load(CURATED_ITEMS_WITH_KESKO)
+    write_overwrite(kesko_df, SQL_TABLE_KESKO_CATEGORIES, dbutils, truncate=True)
+
     print(">>> FULL-ajo valmis.")
+
+    # 🔙 Palautetaan kaikki olennaiset luvut
+    return {
+        "all_keys": all_keys,
+        "silver_rows": n_fetched,
+        "curated_rows": rows_curated,
+        "kesko_stats": kesko_stats,  # tämä otetaan enrich-funktiosta
+    }
 
 
 # ------------- CHANGES-ajo: vain muuttuneet tuotteet ----------- #
@@ -211,3 +217,56 @@ def run_changes_pipeline(spark, dbutils, since_iso):
     print(">>> CHANGES-ajo valmis.")
 
     return updated_gtins
+
+def run_changes_pipeline_with_images(spark, dbutils, since_iso: str):
+    updated_gtins = run_changes_pipeline(spark, dbutils, since_iso=since_iso)
+
+    if not updated_gtins:
+        print("Ei päivittyneitä GTINeitä – ei tarvitse päivittää kuvia.")
+        return
+
+    print(f"Päivitettyjä GTINeitä {len(updated_gtins)} kpl")
+
+    SITE_URL      = dbutils.secrets.get("gs1-kv", "sharepoint-site-url")
+    CLIENT_ID     = dbutils.secrets.get("gs1-kv", "sharepoint-client-id")
+    CLIENT_SECRET = dbutils.secrets.get("gs1-kv", "sharepoint-client-secret")
+
+    TENANT_ID  = SP_TENANT_ID
+    GRAPH_BASE = SP_GRAPH_BASE
+    HOSTNAME   = SP_HOSTNAME
+    SCOPE      = SP_SCOPE
+
+    TARGET_LIBRARY_NAME = SP_TARGET_LIBRARY_NAME
+    TARGET_SUBFOLDER    = SP_TARGET_SUBFOLDER
+
+    stats = process_batch_parallel(
+        spark,
+        curated_items_path=CURATED_ITEMS_WITH_KESKO,
+        updated_gtins=updated_gtins,
+        limit=None,
+        site_url=SITE_URL,
+        tenant_id=TENANT_ID,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        scope=SCOPE,
+        graph_base=GRAPH_BASE,
+        hostname=HOSTNAME,
+        target_library_name=TARGET_LIBRARY_NAME,
+        target_subfolder=TARGET_SUBFOLDER,
+        ean_display_name="EAN",
+        gpc1_display_name="GS1-kategoria1",
+        gpc2_display_name="GS1-kategoria2",
+        brand_display_name="BRAND",
+        kesko1_display_name="Kesko-kategoria1",
+        kesko2_display_name="Kesko-kategoria2",
+        kesko3_display_name="Kesko-kategoria3",
+        product_display_name="Tuote",
+        max_workers=12,
+        image_timeout_sec=12,
+        graph_timeout_sec=25,
+        progress_every=200,
+    )
+
+    print(f"Päivitettyjä tuotetietoja (GTIN): {len(updated_gtins)} kpl")
+    print(f"Kuvakäsittelyn rivimäärä (seen):   {stats['seen']} kpl")
+    print(f"Onnistuneet kuvalataukset (ok):    {stats['ok']} kpl")
