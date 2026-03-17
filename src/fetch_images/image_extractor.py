@@ -4,7 +4,12 @@ from src.config import *
 import mimetypes
 import requests
 
-from src.fetch_images.remove_background import remove_background, is_available as rembg_available
+try:
+    from src.fetch_images.remove_background import remove_background, is_available as rembg_available
+except Exception:
+    # rembg ei asennettu — taustan poisto ohitetaan
+    def remove_background(b): return b
+    def rembg_available(): return False
 
 
 @dataclass(frozen=True)
