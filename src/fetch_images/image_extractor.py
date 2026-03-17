@@ -4,6 +4,8 @@ from src.config import *
 import mimetypes
 import requests
 
+from src.fetch_images.remove_background import remove_background, is_available as rembg_available
+
 
 @dataclass(frozen=True)
 class ItemImage:
@@ -17,12 +19,13 @@ class ImageBlob:
     gtin: str
     gpc_family_code: str
     content: bytes
-    extension: str  # esim. ".jpg"
+    extension: str  # esim. ".jpg", ".png"
 
 
 class ImageExtractor:
-    def __init__(self, timeout_sec: int = 30):
+    def __init__(self, timeout_sec: int = 30, remove_bg: bool = True):
         self.timeout_sec = timeout_sec
+        self.remove_bg = remove_bg
         self.session = requests.Session()
 
     def _guess_extension(self, resp: requests.Response, url: str) -> str:
@@ -38,13 +41,20 @@ class ImageExtractor:
 
     def fetch(self, item: ItemImage) -> ImageBlob:
         """
-        Hakee kuvan URL:ista ja palauttaa ImageBlobin.
+        Hakee kuvan URL:ista, poistaa taustan (jos rembg saatavilla)
+        ja palauttaa ImageBlobin.
         Heittää poikkeuksen, jos HTTP-pyyntö epäonnistuu.
         """
         r = self.session.get(item.url, timeout=self.timeout_sec, stream=True)
         r.raise_for_status()
         content = r.content
         ext = self._guess_extension(r, item.url)
+
+        # Taustan poisto: tuottaa PNG:n transparentilla taustalla
+        if self.remove_bg and rembg_available():
+            content = remove_background(content)
+            ext = ".png"  # rembg palauttaa aina PNG:n
+
         return ImageBlob(
             gtin=item.gtin,
             gpc_family_code=item.gpc_family_code,

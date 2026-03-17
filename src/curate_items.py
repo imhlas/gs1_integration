@@ -4,11 +4,24 @@ import json, re, datetime
 from pyspark.sql import Row
 from pyspark.sql.types import StructType, StructField, StringType, BooleanType
 
-# --- Prioriteetit (annettuna) ---
+# --- Prioriteetit: hyllykuvaystävällinen järjestys ---
+# GS1-suffiksin rakenne: [kuvakulma][numero][tausta][numero]
+#   Kuvakulma: C=centre, A=front, H=top, D=back
+#   Tausta:    N=natural (ei taustaa), C=clipped (valkoinen), L=lifestyle, R=heijastus
+#
+# Hyllykuviin paras: suora kuva (C/A) + natural-tausta (N) tai clipped (C).
+# Lifestyle (L) = markkinointikuva -> huono hyllykuvaksi.
 SUFFIX_PRIORITY = {
-    "C1C1": 120, "C1N1": 115, "A1C1": 110, "H1N1": 105, "A1N1": 102,
-    "C1L1": 100, "C1R1": 98,  "C1N0": 96,  "A1C0": 94,  "C1C0": 92,
-    "H1C1": 90,  "A1L1": 88,  "C3C1": 86,  "D1NE": 84,  "A1N0": 82,
+    "C1N1": 130, "A1N1": 125,  # centre/front + natural tausta → PARAS
+    "C1N0": 120, "A1N0": 118,  # centre/front + natural, vaihtoehto
+    "C1C1": 115, "A1C1": 112,  # centre/front + clipped (valkoinen) → OK
+    "C1C0": 110, "A1C0": 108,  # clipped-vaihtoehto
+    "H1N1": 100, "H1C1": 98,   # ylhäältä → käy joihinkin
+    "C1R1": 90,                 # heijastus
+    "C3C1": 85,                 # multi-angle centre
+    "D1NE": 50,                 # takaa → huono
+    "C1L1": 40,  "A1L1": 38,   # lifestyle → markkinointi, huono hyllykuvaksi
+    "C1LA": 35,                 # lifestyle-variantti
 }
 EXT_PRIORITY = {"jpg": 10, "jpeg": 10, "png": 8, "webp": 6, "tif": 5, "tiff": 5, "gif": 2}
 
