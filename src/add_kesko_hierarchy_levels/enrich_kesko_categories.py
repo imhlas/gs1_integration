@@ -3,7 +3,7 @@
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType
 from utils import azuresqlserver as sqlutil
-from src.config import SQL_TABLE_CURATED_ITEMS, CURATED_ITEMS_WITH_KESKO  # käyttää keskitettyä konfigia
+from src.config import SQL_TABLE_CURATED_ITEMS, CURATED_ITEMS_WITH_KESKO
 
 
 def _strip_leading_zeros_col(col: F.Column) -> F.Column:
@@ -15,11 +15,45 @@ def _strip_leading_zeros_col(col: F.Column) -> F.Column:
     return F.when(no_zeros == "", F.lit(None).cast(StringType())).otherwise(no_zeros)
 
 
+# --- Rajausmäärittelyt ---
+EXCLUDE_L2 = [
+    '11 - Kala',
+    '12 - Lihajaloste',
+    '14 - Leipä',
+    '26 - Jäätelöt',
+    '33 - Mehut',
+    '39 - Mureat leivät & korput',
+    '40 - Keitot, kastikkeet ja kuivaruoka-ainekse',
+]
+
+EXCLUDE_L3_BY_L2 = {
+    '41 - Maustaminen ja säilöntä': [
+        '410 - Mausteet',
+        '411 - Leivontatarvikkeet ja koristelu',
+        '415 - Suolat',
+    ],
+}
+
+
+def _filter_kesko_categories(kesko_df):
+    """Rajaa pois ei-halutut L2-kategoriat ja L2+L3-yhdistelmät."""
+    filtered = kesko_df.filter(~F.col("PRODUCT_HIERARCHY_LEVEL_2").isin(EXCLUDE_L2))
+
+    for l2_val, l3_list in EXCLUDE_L3_BY_L2.items():
+        filtered = filtered.filter(
+            ~(
+                (F.col("PRODUCT_HIERARCHY_LEVEL_2") == l2_val)
+                & F.col("PRODUCT_HIERARCHY_LEVEL_3").isin(l3_list)
+            )
+        )
+    return filtered
+
+
 def enrich_curated_with_kesko_categories(
     spark,
     dbutils,
-    output_path: str | None = None,                 # <-- Täysi ABFSS-URI configista (kuten CURATED_ITEMS_WITH_KESKO)
-    curated_table: str | None = None,               # jos None -> SQL_TABLE_CURATED_ITEMS
+    output_path: str | None = None,
+    curated_table: str | None = None,
     kesko_levels_table: str = "dbo.KESKO_00_PRODUCT_HIERARCHY_LEVELS",
     write_mode: str = "overwrite",
     overwrite_schema: bool = True,
@@ -28,7 +62,7 @@ def enrich_curated_with_kesko_categories(
     Lue SQL:stä curated-tuoterivit ja Kesko-hierarkiat, liitä L2/L3/L4 GTIN-matchillä:
       1) suora GTIN == GTIN
       2) fallback: curated GTIN ilman etunollia == GTIN
-    Kirjoita lopputulos Deltaan polkuun, joka tulee suoraan configista (kuten curate-funktiossa).
+    Kirjoita lopputulos Deltaan polkuun, joka tulee suoraan configista.
 
     Palauttaa: {"rows_written": int, "rows_categorized": int}
     """
@@ -58,6 +92,9 @@ def enrich_curated_with_kesko_categories(
         )
         .dropDuplicates(["GTIN"])
     )
+
+    # --- Rajaa ei-halutut kategoriat pois ---
+    kesko = _filter_kesko_categories(kesko)
 
     # Fallback-avain: GTIN ilman etunollia
     curated = curated.withColumn("GTIN_NO_LEADING_ZEROS", _strip_leading_zeros_col(F.col("GTIN")))
@@ -123,4 +160,3 @@ def enrich_curated_with_kesko_categories(
     print(f"Kesko-kategorioilla nimettyjä rivejä: {rows_categorized:,} ({rows_categorized/rows_written*100:.1f} %)")
 
     return {"rows_written": rows_written, "rows_categorized": rows_categorized}
-
