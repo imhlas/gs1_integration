@@ -25,11 +25,16 @@ def enrich_curated_with_case_dimensions(
     Strategia 1:N (sama BASE_UNIT useassa CASE:ssa): valitaan myyntierä, jossa pienin
     TotalQuantityOfNextLowerLevelTradeItem (= lähin myyntierä BASE_UNIT:lle).
 
+    Jos BASE_UNIT-rivi on itse despatch unit (`IsDespatchUnit=true`) eikä CASE-emoa löydy
+    joinilla, kopioidaan rivin omat mitat Case_*-sarakkeisiin (Case_GTIN=GTIN, UnitsPerCase=1).
+    Tämä kattaa tuotteet jotka toimitetaan suoraan ilman erillistä CASE-pakkausta.
+
     Uudet sarakkeet BASE_UNIT-riveille:
         Case_GTIN, Case_Depth_mm, Case_Width_mm, Case_Height_mm, Case_GrossWeight_g,
         UnitsPerCase
 
-    Muiden tasojen riveille (CASE, PALLET, consumer-monipakkaukset) uudet sarakkeet ovat NULL.
+    Muiden tasojen riveille (CASE, PALLET) uudet sarakkeet ovat NULL — kuluttaja filtteröi
+    BASE_UNIT-rivit ja katsoo niiden Case_*-sarakkeita.
 
     Palauttaa: {"rows_written": int, "rows_with_case_dims": int}
     """
@@ -73,12 +78,31 @@ def enrich_curated_with_case_dimensions(
         .where("_rn = 1")
         .drop("_rn"))
 
-    new_case_cols = ["Case_GTIN", "Case_Depth_mm", "Case_Width_mm",
-                     "Case_Height_mm", "Case_GrossWeight_g", "UnitsPerCase"]
-
-    enriched_base = (base_rows.alias("b")
+    joined = (base_rows.alias("b")
         .join(case_pick.alias("c"), F.col("b.GTIN") == F.col("c.BaseGTIN"), "left")
-        .select("b.*", *[F.col(f"c.{c}") for c in new_case_cols]))
+        .drop("BaseGTIN"))
+
+    is_self_despatch = F.col("IsDespatchUnit") == True
+
+    enriched_base = (joined
+        .withColumn("Case_GTIN",
+            F.coalesce(F.col("Case_GTIN"),
+                       F.when(is_self_despatch, F.col("GTIN"))))
+        .withColumn("Case_Depth_mm",
+            F.coalesce(F.col("Case_Depth_mm"),
+                       F.when(is_self_despatch, F.col("Depth_mm"))))
+        .withColumn("Case_Width_mm",
+            F.coalesce(F.col("Case_Width_mm"),
+                       F.when(is_self_despatch, F.col("Width_mm"))))
+        .withColumn("Case_Height_mm",
+            F.coalesce(F.col("Case_Height_mm"),
+                       F.when(is_self_despatch, F.col("Height_mm"))))
+        .withColumn("Case_GrossWeight_g",
+            F.coalesce(F.col("Case_GrossWeight_g"),
+                       F.when(is_self_despatch, F.col("GrossWeight_g"))))
+        .withColumn("UnitsPerCase",
+            F.coalesce(F.col("UnitsPerCase"),
+                       F.when(is_self_despatch, F.lit(1).cast(LongType())))))
 
     null_case_cols = [
         F.lit(None).cast(StringType()).alias("Case_GTIN"),

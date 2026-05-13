@@ -26,6 +26,7 @@ kutsuu `src/`-paketin pipeline-funktioita.
 
 **Rikastus ja sivulataukset**
 - [src/add_kesko_hierarchy_levels/enrich_kesko_categories.py](src/add_kesko_hierarchy_levels/enrich_kesko_categories.py) — joinaa Curated-tuotteet `dbo.KESKO_00_PRODUCT_HIERARCHY_LEVELS`-tauluun GTIN:llä; fallback: GTIN ilman etunollia. Suodattaa pois Kesko-tason `EXCLUDE_L2` ja `EXCLUDE_L3_BY_L2` -kategoriat ennen joinia. Kirjoittaa Gold-tason `CURATED_ITEMS_WITH_KESKO`-poluun.
+- [src/add_case_hierarchy/enrich_case_dimensions.py](src/add_case_hierarchy/enrich_case_dimensions.py) — liittää BASE_UNIT-riveille myyntierän (CASE-tason, jossa `IsTradeItemADespatchUnit=true`) mitat uusina sarakkeina. Räjäyttää `ChildTradeItemJson`-listan (CASE→BASE_UNIT-linkit), valitsee 1:N-tilanteessa CASE:n jossa pienin `TotalQuantityOfNextLowerLevelTradeItem`. Kirjoittaa samaan Gold-polkuun (`CURATED_ITEMS_WITH_KESKO`) Kesko-rikastuksen päälle.
 - [src/fetch_images/](src/fetch_images/) — kuvapipeline:
   - [image_extractor.py](src/fetch_images/image_extractor.py) — `ImageExtractor.fetch()` hakee kuvan ja päättelee tiedostopäätteen Content-Type/URL-päätteestä.
   - [delta_images.py](src/fetch_images/delta_images.py) — streamaa kuvarivit Curated/Gold-Deltasta (`BASE_UNIT_OR_EACH`, ei tyhjä URL, ei tyhjä L2-kategoria); `get_image_rows_iter` käyttää `toLocalIterator()`-streamia.
@@ -44,7 +45,9 @@ kutsuu `src/`-paketin pipeline-funktioita.
 - `TradeItem.TradeItemDescriptionModule.TradeItemDescriptionInformation.TradeItemDescription` (kielikohtainen lista, suositaan `LanguageCode == "fi"`)
 - `TradeItem.GdsnTradeItemClassification.{GpcCategoryCode, GpcCategoryName, GpcSegmentCode, GpcFamilyCode, GpcClassCode}`
 - `TradeItem.TradeItemMeasurementsModule.TradeItemMeasurements.{Depth, Width, Height}.Value` ja `TradeItemWeight.GrossWeight.Value`
-- `TradeItem.TradeItemUnitDescriptorCode.Value` (suodatetaan `BASE_UNIT_OR_EACH` kuvapipelinessä)
+- `TradeItem.TradeItemUnitDescriptorCode.Value` (suodatetaan `BASE_UNIT_OR_EACH` kuvapipelinessä). Yleiset arvot Synkassa: `BASE_UNIT_OR_EACH`, `CASE`, `PALLET`. CASE kattaa sekä tukkutoimituseriä että kuluttajamonipakkauksia (esim. juomien 6-pack) — erottelu tehdään `IsTradeItemADespatchUnit`/`IsTradeItemAConsumerUnit` -boolean-kentillä.
+- `TradeItem.IsTradeItemAConsumerUnit/IsTradeItemADespatchUnit/IsTradeItemAnOrderableUnit/IsTradeItemAnInvoiceUnit` — roolit, GS1 antaa Python-bool (`true`/`false`).
+- `TradeItem.NextLowerLevelTradeItemInformation.ChildTradeItem[]` — CASE/PALLET-rivien yksisuuntainen linkki alemman tason GTIN:eihin (lista `{Gtin, QuantityOfNextLowerLevelTradeItem}`). BASE_UNIT-riveissä ei ole vastaavaa ylätason linkkiä.
 - `TradeItem.Gtin`, `CatalogueItemInfo.{Id, LastUpdatedDateTime, Deleted}`
 - `TradeItem.DeliveryPurchasingInformationModule.DeliveryPurchasingInformation.StartAvailabilityDateTime`
 - Kuva-URLit: poimitaan rekursiivisesti `URL_KEYS` / `FILENAME_KEYS` / `MEDIA_ID_KEYS` -avaimista; pisteytys `_XXXX.<ext>`-suffiksin (esim. `C1C1`, `C1N1`) ja tiedostopäätteen mukaan.
@@ -52,8 +55,8 @@ kutsuu `src/`-paketin pipeline-funktioita.
 **Delta-tasot**
 - **Bronze** `gs1/bronze/public_item_sync` — `Id`, `load_time`.
 - **Silver** `gs1/silver/catalogue_items` — `Id`, `raw_json` (alkuperäinen JSON-merkkijono), `ingest_ts`.
-- **Curated** `gs1/curated/items_selected_fields` — litistetty taulukko: `StartAvailabilityDateTime`, `BrandName`, `TradeItemDescription_fi`, `GpcCategoryCode/Name`, `GpcSegmentCode/FamilyCode/ClassCode`, `Depth_mm/Width_mm/Height_mm/GrossWeight_g` (kaikki StringType), `TradeItemUnitDescriptor`, `InfoProviderName`, `GTIN`, `Id`, `LastUpdatedDateTime`, `Deleted` (Boolean), `PrimaryImageUrl/FileName/MediaItemId`, `SecondaryImageUrl`, `Lejos_UpdatedAt`. Deduplikoitu GTIN:llä.
-- **Gold** `gs1/gold/items_with_kesko_levels` — Curated + `PRODUCT_HIERARCHY_LEVEL_2/3/4` + `GTIN_NO_LEADING_ZEROS`.
+- **Curated** `gs1/curated/items_selected_fields` — litistetty taulukko: `StartAvailabilityDateTime`, `BrandName`, `TradeItemDescription_fi`, `GpcCategoryCode/Name`, `GpcSegmentCode/FamilyCode/ClassCode`, `Depth_mm/Width_mm/Height_mm/GrossWeight_g` (kaikki StringType), `TradeItemUnitDescriptor`, `InfoProviderName`, `GTIN`, `Id`, `LastUpdatedDateTime`, `Deleted` (Boolean), `PrimaryImageUrl/FileName/MediaItemId`, `SecondaryImageUrl`, `IsConsumerUnit/IsDespatchUnit/IsOrderableUnit/IsInvoiceUnit` (Boolean — erottelee BASE_UNIT/CASE/PALLET-rivien roolit, etenkin tukkutoimituseriä kuluttajamonipakkauksista), `TotalQuantityOfNextLowerLevelTradeItem`, `ChildTradeItemJson` (CASE-rivien lower-level GTIN -lista raw-JSON-muodossa), `Lejos_UpdatedAt`. Deduplikoitu GTIN:llä — **HUOM**: sama tuote esiintyy useammalla rivillä eri `TradeItemUnitDescriptor`-arvoilla (BASE_UNIT/CASE/PALLET), koska niillä on omat GTIN:nsä.
+- **Gold** `gs1/gold/items_with_kesko_levels` — Curated + `PRODUCT_HIERARCHY_LEVEL_2/3/4` + `GTIN_NO_LEADING_ZEROS` + BASE_UNIT-riveille myyntierämitat: `Case_GTIN`, `Case_Depth_mm`, `Case_Width_mm`, `Case_Height_mm`, `Case_GrossWeight_g`, `UnitsPerCase` (Long). Muille tasoille (CASE, PALLET, kuluttajamonipakkaukset) `Case_*`-sarakkeet ovat NULL.
 
 **Azure SQL -kohteet**
 - `dbo.Test_Curated_Items2` (`SQL_TABLE_CURATED_ITEMS`) — Curated-tason snapshot (overwrite + truncate).

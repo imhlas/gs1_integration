@@ -116,6 +116,9 @@ Per feature: päivämäärä, mitä Silver-soluja ajettiin (SELECT/JSON-polut ta
   - **Sekoituspakkaukset**: 580 CASE:ssa eri BASE_UNIT-GTINejä. Pieni edge case mutta huomioitava.
   - **Boolean-jakauma vahvistaa terminologian:** ~96 % CASE-riveistä on `IsDespatchUnit=true, IsConsumerUnit=false` (varsinainen tukkutoimituserä = käyttäjän "myyntierä"). ~1 800 CASE-riviä on `IsConsumerUnit=true` (juomien 6-packit yms.). → join-suodatin pitäisi olla `TradeItemUnitDescriptor='CASE' AND IsTradeItemADespatchUnit=true`, ei pelkkä `CASE`. Tämä eliminoi häiriön kuluttajamonipakkauksista.
   - **PackagingTypeCode** käyttää UN/ECE Rec 21 -koodeja (`CS`=Case, `AA`=Intermediate bulk container) — fyysinen pakkaustyyppi, ei business-rooli. Älä luota tähän roolin tunnistuksessa, käytä boolean-kenttiä.
+  - **Käyttäjän hypoteesi "myyntierämitat ovat BASE_UNIT-jsonissa" osoittautui datalla vääräksi.** Tutkittiin 3 BASE_UNIT-tuotetta (juoma, lihajaloste, jauhopussi) ja kaikki TradeItem-tason moduulit (`SalesInformationModule`, `VariableTradeItemInformationModule`, `TradeItemMeasurementsModule`, `PackagingInformationModule`). Yksikään ei sisällä myyntierämittoja. **GS1 GDSN -arkkitehtuuri on yksisuuntainen ylhäältä alas**: CASE-rivi linkkaa BASE_UNIT:iin `NextLowerLevelTradeItemInformation.ChildTradeItem[].Gtin`-kautta, mutta BASE_UNIT-rivissä ei ole vastaavaa ylätason linkkiä eikä myyntierämittoja. Alkuperäinen CASE-rikastus-suunnitelma oli oikea — vain cache-bugi (alla) esti sen toimimisen. **Oppi:** kun käyttäjä esittää oletuksen rakenteesta, vahvista se datalla pretty-print-solulla ennen koodimuutoksia, mutta älä luovu omasta hypoteesista jos data sen kumoaa.
+  - **Cache-bugi (Python sys.modules):** `inspect.getsource(module)` lukee tiedostosta ja näyttää uutta koodia, mutta **runtime-funktioobjekti pysyy modulin ensilatauksen versiona** kunnes notebook-istunto käynnistetään uudelleen. Diagnostiikka voi siis valehdella. Aina kun `*.py`-tiedostoa muutetaan ja Pull tehdään Reposissa, **`dbutils.library.restartPython()` on PAKOLLINEN ennen uudelleenajoa**, tai vanha funktio kirjoittaa Curated-Deltan vanhalla skeemalla ja uudet sarakkeet ovat NULL. Tämä oli session suurin aikasyöppö.
+- **Lopullinen tulos (toteutuksen jälkeen):** 41 121 BASE_UNIT-tuotetta (~70 % kaikista BASE_UNITeista) sai myyntierämitat. Loput ~18 000 ovat tuotteita joiden CASE-emolla `IsDespatchUnit≠true` tai joiden toimittaja ei ole julkaissut CASE-tason GTINiä Synkkaan.
 
 ## Sudenkuopat ja toistuvat kysymykset
 
@@ -140,6 +143,25 @@ Kysy käyttäjältä **mihin rooliin** kenttä liittyy, älä oleta UnitDescript
 
 ### Tarkista AINA ensin onko data jo Curated/SQL:ssä
 Ennen Silver-tutkimusta ja parse_one-muokkausta: aja `spark.read.format("delta").load(CURATED_ITEMS).columns` ja katso onko etsitty kenttä jo siellä. Tarkista myös SQL-taulun jakauma `TradeItemUnitDescriptor`-sarakkeella. Saattaa olla että feature on jo olemassa eikä koodimuutosta tarvita — vain dokumentointi.
+
+### Python sys.modules cache pitää vanhaa funktioobjektia
+**Tämä on session suurin sudenkuoppa Databricks-notebookeissa.** Kun `*.py`-tiedosto muutetaan ja Git-pull tehdään Repos-näkymästä:
+- `inspect.getsource(module)` lukee tiedostosta → näyttää **uutta** koodia
+- `module.__file__` osoittaa **uuteen** tiedostoon
+- MUTTA `module.funktio` on **vanha funktio-objekti**, luotu modulin ensilatauksen yhteydessä — Python ei reload:aa importteja kun tiedosto muuttuu
+
+Oire: pipeline ajaa onnistuneesti, kirjoittaa Curated-Deltaan, mutta uudet sarakkeet/kentät ovat NULL kaikilla riveillä. `groupBy("UusiKentta")` toimii (sarake on Deltassa) mutta arvot puuttuvat.
+
+**Korjaus:** `dbutils.library.restartPython()` omassa solussaan ennen kuin ajat funktion joka on muuttunut. Tämä nollaa kernelin → seuraavat importit lataavat moduulit tuoreina. Pidä tämä mielessä **JOKA KERTA** kun teet `git pull` Databricks Repos -näkymässä `*.py`-muutosten jälkeen.
+
+### Uudet tiedostot/hakemistot eivät automaattisesti näy Databricksissa
+Paikallisten editor-muutosten ja Databricks-ajon välissä on **Git-vaihe**: cluster lukee koodin Databricks Repos -integraation kautta GitHubista. Aina kun lisätään uusi moduli tai hakemisto:
+
+1. `git add` + `git commit` + `git push origin main` paikallisesti.
+2. Databricks-UI:ssa Repos-näkymästä **Pull**.
+3. Vasta sen jälkeen `from src.uusi_moduli import ...` toimii notebook-solussa.
+
+Oire: `ModuleNotFoundError: No module named 'src.xxx'` vaikka tiedosto on olemassa paikallisesti. Muista mainita käyttäjälle tämä **ennen** kuin pyydät häntä ajamaan importteja sisältäviä soluja.
 
 ### `write_overwrite(truncate=True)` ei lisää uusia sarakkeita SQL-tauluun
 Katso Vaihe 4. Tämä on ensimmäinen "miksei kenttä näy SQL:ssä, vaikka Curated-Deltassa se on" -hetki. Päätä ALTER TABLE vs. `truncate=False` käyttäjän kanssa.
