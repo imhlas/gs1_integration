@@ -144,6 +144,11 @@ Kysy käyttäjältä **mihin rooliin** kenttä liittyy, älä oleta UnitDescript
 ### Tarkista AINA ensin onko data jo Curated/SQL:ssä
 Ennen Silver-tutkimusta ja parse_one-muokkausta: aja `spark.read.format("delta").load(CURATED_ITEMS).columns` ja katso onko etsitty kenttä jo siellä. Tarkista myös SQL-taulun jakauma `TradeItemUnitDescriptor`-sarakkeella. Saattaa olla että feature on jo olemassa eikä koodimuutosta tarvita — vain dokumentointi.
 
+### Idempotenssi: enrich-funktio joka kirjoittaa samaan polkuun josta lukee
+Jos enrich-funktio (esim. `enrich_curated_with_case_dimensions`) lukee `CURATED_ITEMS_WITH_KESKO`-polusta ja kirjoittaa **takaisin** samaan polkuun, **toinen ajo sisältää jo edellisen ajon lisäämät sarakkeet** (`Case_GTIN`, `Case_Depth_mm`, …). Self-join tai withColumn-päivitykset kaatuvat tällöin `AMBIGUOUS_REFERENCE`-virheellä koska sarake esiintyy sekä vasemmalla että oikealla puolella joinia.
+
+**Korjaus:** ennen muuta käsittelyä `drop` ne sarakkeet jotka funktio aikoo lisätä uudelleen — `src = src.drop("Case_GTIN", ...)`. Sama pätee mihin tahansa enrich-funktioon jonka output-polku == input-polku.
+
 ### Python sys.modules cache pitää vanhaa funktioobjektia
 **Tämä on session suurin sudenkuoppa Databricks-notebookeissa.** Kun `*.py`-tiedosto muutetaan ja Git-pull tehdään Repos-näkymästä:
 - `inspect.getsource(module)` lukee tiedostosta → näyttää **uutta** koodia

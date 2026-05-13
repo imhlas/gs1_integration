@@ -43,6 +43,15 @@ def enrich_curated_with_case_dimensions(
 
     src = spark.read.format("delta").load(input_path)
 
+    # Idempotenssi: jos edellinen ajo on jo lisännyt Case_*-sarakkeet samaan polkuun,
+    # dropataan ne ennen kuin lisätään uudet versiot. Muuten join joinin alla
+    # tuottaa AMBIGUOUS_REFERENCE -virheen.
+    stale_cols = [c for c in ["Case_GTIN", "Case_Depth_mm", "Case_Width_mm",
+                              "Case_Height_mm", "Case_GrossWeight_g", "UnitsPerCase"]
+                  if c in src.columns]
+    if stale_cols:
+        src = src.drop(*stale_cols)
+
     base_rows = src.where("TradeItemUnitDescriptor = 'BASE_UNIT_OR_EACH'")
     other_rows = src.where("TradeItemUnitDescriptor IS NULL OR TradeItemUnitDescriptor <> 'BASE_UNIT_OR_EACH'")
 
