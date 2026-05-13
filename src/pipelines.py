@@ -6,6 +6,7 @@ from src.connection import APIClient
 from src.endpoints import list_keys_all, list_keys_changes, next_offset
 from src.loaders import fetch_all_keys_to_bronze, fetch_items_to_silver_json
 from src.add_kesko_hierarchy_levels.enrich_kesko_categories import enrich_curated_with_kesko_categories
+from src.add_case_hierarchy.enrich_case_dimensions import enrich_curated_with_case_dimensions
 from src.fetch_images.sharepoint_upload import process_batch_parallel
 from src.curate_items import kuratoi_ja_talleta_deltaan_like_batch
 from utils.azuresqlserver import write_overwrite  
@@ -98,7 +99,10 @@ def run_full_pipeline(spark, dbutils):
     print(">>> Lisätään Kesko-kategoriat")
     kesko_stats = enrich_curated_with_kesko_categories(spark, dbutils)
 
-    print(">>> Kirjoitetaan Kesko-rikastettu data SQL-tauluun (overwrite)")
+    print(">>> Liitetään myyntierämitat BASE_UNIT-riveille (CASE + IsDespatchUnit=true)")
+    case_stats = enrich_curated_with_case_dimensions(spark)
+
+    print(">>> Kirjoitetaan Kesko + Case-rikastettu data SQL-tauluun (overwrite)")
     kesko_df = spark.read.format("delta").load(CURATED_ITEMS_WITH_KESKO)
     write_overwrite(kesko_df, SQL_TABLE_KESKO_CATEGORIES, dbutils, truncate=True)
 
@@ -110,6 +114,7 @@ def run_full_pipeline(spark, dbutils):
         "silver_rows": n_fetched,
         "curated_rows": rows_curated,
         "kesko_stats": kesko_stats,  # tämä otetaan enrich-funktiosta
+        "case_stats": case_stats,
     }
 
 
@@ -214,6 +219,10 @@ def run_changes_pipeline(spark, dbutils, since_iso):
 
     print(">>> Lisätään Kesko-kategoriat")
     enrich_curated_with_kesko_categories(spark, dbutils)
+
+    print(">>> Liitetään myyntierämitat BASE_UNIT-riveille (CASE + IsDespatchUnit=true)")
+    enrich_curated_with_case_dimensions(spark)
+
     print(">>> CHANGES-ajo valmis.")
 
     return updated_gtins

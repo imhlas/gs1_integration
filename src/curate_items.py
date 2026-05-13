@@ -201,6 +201,18 @@ def kuratoi_ja_talleta_deltaan_like_batch(
         lastup = ci.get("LastUpdatedDateTime") or data.get("LastUpdatedDateTime") or get(ti, "TradeItemSynchronisationDates", "LastChangeDateTime")
         deleted= ci.get("Deleted") if ci.get("Deleted") is not None else data.get("Deleted")
 
+        # --- Rooliboolean-kentät (erottavat tukkutoimituseriä kuluttajamonipakkauksista) ---
+        is_consumer_unit  = ti.get("IsTradeItemAConsumerUnit")
+        is_despatch_unit  = ti.get("IsTradeItemADespatchUnit")
+        is_orderable_unit = ti.get("IsTradeItemAnOrderableUnit")
+        is_invoice_unit   = ti.get("IsTradeItemAnInvoiceUnit")
+
+        # --- Pakkaushierarkia: lower-level GTIN -lista (CASE-rivissä lapset = BASE_UNIT-tuotteet) ---
+        nlli = ti.get("NextLowerLevelTradeItemInformation") or {}
+        total_qty_lower = nlli.get("TotalQuantityOfNextLowerLevelTradeItem")
+        child_trade_item = nlli.get("ChildTradeItem")
+        child_json = json.dumps(child_trade_item, ensure_ascii=False) if child_trade_item is not None else None
+
         # --- Kuvat: suffiksi/ext -pisteytys → Primary & Secondary URL ---
         primary_url, secondary_url, primary_filename, primary_media_id = pick_top2_urls(data)
 
@@ -234,7 +246,15 @@ def kuratoi_ja_talleta_deltaan_like_batch(
             "PrimaryImageMediaItemId":   primary_media_id,
 
             "SecondaryImageUrl":         secondary_url,
-            
+
+            "IsConsumerUnit":            True if is_consumer_unit is True else (False if is_consumer_unit is False else None),
+            "IsDespatchUnit":            True if is_despatch_unit is True else (False if is_despatch_unit is False else None),
+            "IsOrderableUnit":           True if is_orderable_unit is True else (False if is_orderable_unit is False else None),
+            "IsInvoiceUnit":             True if is_invoice_unit is True else (False if is_invoice_unit is False else None),
+
+            "TotalQuantityOfNextLowerLevelTradeItem": str(total_qty_lower) if total_qty_lower is not None else None,
+            "ChildTradeItemJson":        child_json,
+
             "Lejos_UpdatedAt":           ingest_ts,
         }
 
@@ -272,7 +292,14 @@ def kuratoi_ja_talleta_deltaan_like_batch(
 
         StructField("SecondaryImageUrl",         StringType(), True),
 
-        # UUSI SARAKE: Lejos_UpdatedAt
+        StructField("IsConsumerUnit",            BooleanType(), True),
+        StructField("IsDespatchUnit",            BooleanType(), True),
+        StructField("IsOrderableUnit",           BooleanType(), True),
+        StructField("IsInvoiceUnit",             BooleanType(), True),
+
+        StructField("TotalQuantityOfNextLowerLevelTradeItem", StringType(), True),
+        StructField("ChildTradeItemJson",        StringType(), True),
+
         StructField("Lejos_UpdatedAt",                 StringType(), True),
     ])
 
