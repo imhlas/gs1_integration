@@ -101,6 +101,27 @@ Kirjaa tähän alle **rehellisesti** jokaisen featuren tutkimisen jäljet. Älä
 
 Per feature: päivämäärä, mitä Silver-soluja ajettiin (SELECT/JSON-polut talteen), mitkä polut olivat umpikujia, missä kohtaa Claude joutui kysymään käyttäjältä (= näihin tarvitaan ohje/oletus), mitä virheitä tuli ensimmäisellä `parse_one()`-yrityksellä, tuliko SQL-skeemaongelmia.
 
+### 2026-05-15 — realtime Kesko-kategoriat omille tuotteille (KESKO_02)
+- **Lähtötilanne:** olemassa oleva `enrich_kesko_categories.py` joinaa Curated → `dbo.KESKO_00_PRODUCT_HIERARCHY_LEVELS` GTIN:llä. Ongelma: KESKO_00 viivästyy 4 kk koska se ylläpidetään kilpailijoiden myyntidatasta. Omat tuotteet jäävät ilman kategoriaa kunnes 4 kk myyntidata tulee saataville → kuvia ei haeta (kuvasuodatin vaatii `PRODUCT_HIERARCHY_LEVEL_2 IS NOT NULL`).
+- **Selvitys:** käyttäjä mainitsi taulut `dbo.KESKO_01_daily_rawdata` (24M riviä, päivätaso) ja `dbo.KESKO_02_weekly_sales` (3.6M riviä, viikkotaso) jotka sisältävät **Lejosin omat myynnit Keskossa**.
+- **Mittaukset (kaikki taulut heap ilman indeksiä):**
+  - KESKO_01:n 4kk DISTINCT-kysely > 5 min (timeout) — liian hidas.
+  - KESKO_02:n 4kk DISTINCT(EAN, TuoteryhmäID) = **51 s**, 321 yhdistelmää.
+  - KESKO_02 + KESKO_00 yhdistetty SQL-kysely (JOIN L4-prefix LIKE:llä) = **74 s**, 357 riviä.
+- **Mapping:** KESKO_02:n `TuoteryhmäID` on **4-numeroinen** (esim. `5043`), KESKO_00:n `PRODUCT_HIERARCHY_LEVEL_4` sisältää prefiksin muotoa `"5043 - Nimi"`. Joinataan SQL:ssä `k00.PRODUCT_HIERARCHY_LEVEL_4 LIKE k02.[Tuoteryhmäid] + ' - %'`. Osa TuoteryhmäID:istä on tarkempia kuin KESKO_00 kattaa (sample 5:stä vain 1 täysi match) → `LEFT JOIN` + `WHERE k00.L2 IS NOT NULL` jättää matchaamattomat pois.
+- **Vaihtoehtoja harkittu ja hylätty:**
+  - **A (suora kysely jokaisessa ajossa KESKO_01:lle)**: > 5 min, ei toimi.
+  - **B (indeksin lisäys KESKO_01:lle)**: hylätty koska jaettu tuotantotaulu, muiden pipeline-työnkulkujen riskit liian suuret.
+- **Toteutus:**
+  - Uusi apufunktio `_load_realtime_kesko_lookup_from_kesko_02` joka palauttaa pienen `(EAN, L2, L3, L4)`-DataFrame:n.
+  - Uusi L0-join `enrich_curated_with_kesko_categories`:ssä **ennen** olemassa olevia L1/L2-joineja: `curated.GTIN_NO_LEADING_ZEROS == realtime.EAN`. Käytetään `F.broadcast`-hintaa (~357 riviä).
+  - Coalesce-järjestys **L0 → L1 → L2** (realtime voittaa).
+  - Uusi sarake `KESKO_CATEGORY_SOURCE` (`realtime` / `kesko00_direct` / `kesko00_no_leading_zeros` / NULL) auttaa diagnostiikassa.
+- **Sudenkuopat ja huomioita:**
+  - **Ääkköset SQL-kyselyssä**: KESKO_02:n sarakkeen nimi on `Tuoteryhmäid` (ä). sqlcmd:n output näytti merkin `?`-merkkinä, mutta itse SQL-kyselyssä `[Tuoteryhmäid]`-hakasulutus toimii kun lähetetään UTF-8:na. Tarkistettava jos joinin tuloksena 0 riviä.
+  - **TuoteryhmäID-tarkkuus**: 4-numeroinen voi olla L5-tason taso jota KESKO_00 ei kata. Hyväksyimme NULL-mapping puuttuville (parempi kuin väärä prefix-match L3-tasolle).
+  - **`KESKO_CATEGORY_SOURCE`-sarake muuttaa Gold-skeemaa** → SQL-taulu `dbo.product_data_with_kesko` vaatii `ALTER TABLE ... ADD KESKO_CATEGORY_SOURCE NVARCHAR(50) NULL`.
+
 ### 2026-05-13 — myyntierämitat (CASE-tason mitat)
 - **Silver-jakauma `TradeItemUnitDescriptorCode.Value`**: BASE_UNIT_OR_EACH 59 829, CASE 49 916, PALLET 37 324 (yht. 147 069 riviä).
 - **Löytö 1:** myyntierä = oma TradeItem-rivi omalla GTIN:llä, ei upotettu BASE_UNIT-riviin → **tyyppi B**, ei pelkkä `parse_one()`-lisäys.
