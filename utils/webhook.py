@@ -15,8 +15,6 @@ def send_gs1_pipeline_webhook(dbutils, data: dict) -> int:
       - product_duration_human
       - images_stats: {ok}
       - images_duration_human
-      - processing_duration_human  (sharepoint_image_processor -vaihe)
-      - processing_exit_code        (0 = OK, muu = virhe)
     """
 
     # Webhook-URL
