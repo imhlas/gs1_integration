@@ -123,8 +123,36 @@ def run_full_pipeline_with_images(spark, dbutils):
     print(f"Onnistuneet kuvalataukset: {stats['ok']} kpl")
     print(f"Epäonnistuneet kuvalataukset: {stats['fail']} kpl")
 
+    # ---------- 3) Kuvankäsittely: taustojen poisto + cropping ---------- #
+    print(">>> Aloitetaan kuvankäsittely (sharepoint_image_processor)")
+    t4 = time.perf_counter()
+
+    import asyncio
+    from sharepoint_image_processor.main import inject_databricks_secrets
+    from sharepoint_image_processor.core.config import AppConfig
+    from sharepoint_image_processor.agents.orchestrator import Orchestrator
+
+    inject_databricks_secrets()  # asettaa AZURE_CLIENT_ID/SECRET env-muuttujiin
+    img_config = AppConfig()
+    img_exit_code = asyncio.run(
+        Orchestrator(img_config).run(
+            mode="incremental",
+            dry_run=False,
+            filters=[],
+            sample_size=None,
+            review_only=False,
+        )
+    )
+
+    t5 = time.perf_counter()
+    processing_duration_sec = t5 - t4
+    processing_duration_human = _fmt_duration(processing_duration_sec)
+
+    print(f">>> Kuvankäsittelyn kesto: {processing_duration_human}")
+    print(f"Image-processor exit code: {img_exit_code}")
+
     overall_end = datetime.datetime.utcnow().isoformat()
-    print(f">>> FULL + IMAGES -ajo valmis (UTC end: {overall_end})")
+    print(f">>> FULL + IMAGES + PROCESSING -ajo valmis (UTC end: {overall_end})")
 
     # Kootaan KAIKKI tarvittava info yhteen dictiin
     result = {
@@ -133,6 +161,8 @@ def run_full_pipeline_with_images(spark, dbutils):
         "product_duration_human": product_duration_human,
         "images_duration_human": images_duration_human,
         "images_stats": stats,          # sisältää seen/ok/fail
+        "processing_duration_human": processing_duration_human,
+        "processing_exit_code": img_exit_code,
         "all_keys": product_stats["all_keys"],
         "kesko_stats": product_stats["kesko_stats"],
     }

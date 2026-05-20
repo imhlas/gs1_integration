@@ -1,0 +1,29 @@
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual envs / local dev
+.env
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# sharepoint_image_processor runtime state (DBFS:lle tarkoitettu, ei committia)
+state/
+sharepoint_image_processor/state/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Claude Code paikalliset asetukset (per-user)
+.claude/settings.local.json
+.claude/settings.json

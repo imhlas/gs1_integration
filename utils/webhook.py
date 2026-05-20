@@ -11,10 +11,12 @@ def send_gs1_pipeline_webhook(dbutils, data: dict) -> int:
       - started_at_utc
       - finished_at_utc
       - all_keys
-      - kesko_stats: {rows_written, rows_categorized}
+      - kesko_stats: {rows_written, rows_categorized, rows_via_realtime}
       - product_duration_human
       - images_stats: {ok}
       - images_duration_human
+      - processing_duration_human  (sharepoint_image_processor -vaihe)
+      - processing_exit_code        (0 = OK, muu = virhe)
     """
 
     # Webhook-URL

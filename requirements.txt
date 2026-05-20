@@ -1,0 +1,20 @@
+# gs1_integration pipeline -riippuvuudet
+#
+# Asenna joko:
+#  - Cluster-tason libraries (Compute -> [cluster] -> Libraries -> Install new -> PyPI)
+#  - tai notebook-solussa: %pip install -r requirements.txt
+#
+# Databricks ML Runtime sisältää valmiiksi pyspark, requests, pandas, mimetypes.
+
+# GS1 + SharePoint upload (jo käytössä)
+msal>=1.28.0
+requests>=2.31.0
+
+# Image processor (sharepoint_image_processor -paketti)
+aiohttp>=3.9.0
+Pillow>=10.2.0
+rembg>=2.0.50
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+typer>=0.9.0
+structlog>=24.1.0

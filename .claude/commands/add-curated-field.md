@@ -101,6 +101,17 @@ Kirjaa tähän alle **rehellisesti** jokaisen featuren tutkimisen jäljet. Älä
 
 Per feature: päivämäärä, mitä Silver-soluja ajettiin (SELECT/JSON-polut talteen), mitkä polut olivat umpikujia, missä kohtaa Claude joutui kysymään käyttäjältä (= näihin tarvitaan ohje/oletus), mitä virheitä tuli ensimmäisellä `parse_one()`-yrityksellä, tuliko SQL-skeemaongelmia.
 
+### 2026-05-20 — sharepoint_image_processor -integraatio (eri repo → sama repo)
+- **Lähtötilanne:** erillinen repo `image-processor` (käyttäjän mukaan polussa `iida.lassila/image-processor`) joka käsittelee kuvia (taustojen poisto + crop) ja ajetaan manuaalisesti. Tavoite: yhdistää ajastettuun gs1_integration-pipelineen.
+- **Käyttäjän päätös (4 valintaa AskUserQuestionilla):** (1) hakemisto `sharepoint_image_processor/` repon juuressa (ei `src/`-uudelleennimeämistä → importit pysyvät ennallaan); (2) riippuvuudet sekä cluster-tasolla että `%pip install -r requirements.txt`-solussa; (3) kytkentä osaksi `run_full_pipeline_with_images`-funktiota; (4) vanhan repon kohtalo päätetään myöhemmin.
+- **Yhdistyspisteet:** sama SharePoint-kirjasto ("GS1 Tuotekuvat"), sama secret scope `gs1-kv` ja **samat avainnimet** `sharepoint-client-id` + `sharepoint-client-secret` (= sama App Registration). Tenant-id hardkoodattuna molemmissa repoissa samalla arvolla. Ei tunnusten jakamis-konfliktia.
+- **Sudenkuopat:**
+  - **`run_all.ipynb` on standardi-Jupyter-JSON-ipynb.** Käyttäjän Databricks export, ei pelkkä XML-rendered näkymä joka Claude Codessa näkyy. Älä käytä Write-toolia notebookkiin — käytä `NotebookEdit`-toolia (`edit_mode=insert/replace/delete`). Jos kuitenkin yliampuu Write:lla, `git restore <ipynb>` palauttaa, sitten NotebookEdit.
+  - **Async-kutsu sync-pipelinestä:** sharepoint_image_processor:n `Orchestrator.run()` on `async def`. Kutsu se synkronisesti `asyncio.run(Orchestrator(config).run(...))`. Toimii Databricks-notebookissa.
+  - **Salaisuudet env-muuttujille:** `sharepoint_image_processor/main.py`:n `inject_databricks_secrets()` lukee Key Vault -arvot ja kirjoittaa ne `os.environ`-muuttujiin (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`). Kutsu se ennen `AppConfig()`-luontia, muuten pydantic-validointi kaatuu missing field -virheeseen.
+  - **State-tiedostot DBFS:llä:** oletusasetukset `dbfs:/mnt/image-processor/state/{state,delta_token}.json`. Lisätty `.gitignore`-listalle (`state/`, `sharepoint_image_processor/state/`) jotta lokaalit testit eivät päädy committiin.
+- **Lopputulos:** `requirements.txt` luotu (uudet riippuvuudet rembg, Pillow, typer, pydantic, pydantic-settings, structlog, aiohttp); `run_all.ipynb`:hen lisätty pip-install-solu; `run_full_pipeline_with_images.py`:hen lisätty 3. vaihe `Orchestrator.run(mode="incremental")` kuvalatauksen jälkeen; webhook-payload sai uudet kentät `processing_duration_human` ja `processing_exit_code`.
+
 ### 2026-05-15 — realtime Kesko-kategoriat omille tuotteille (KESKO_02)
 - **Lähtötilanne:** olemassa oleva `enrich_kesko_categories.py` joinaa Curated → `dbo.KESKO_00_PRODUCT_HIERARCHY_LEVELS` GTIN:llä. Ongelma: KESKO_00 viivästyy 4 kk koska se ylläpidetään kilpailijoiden myyntidatasta. Omat tuotteet jäävät ilman kategoriaa kunnes 4 kk myyntidata tulee saataville → kuvia ei haeta (kuvasuodatin vaatii `PRODUCT_HIERARCHY_LEVEL_2 IS NOT NULL`).
 - **Selvitys:** käyttäjä mainitsi taulut `dbo.KESKO_01_daily_rawdata` (24M riviä, päivätaso) ja `dbo.KESKO_02_weekly_sales` (3.6M riviä, viikkotaso) jotka sisältävät **Lejosin omat myynnit Keskossa**.
