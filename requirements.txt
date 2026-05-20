@@ -6,19 +6,18 @@
 #
 # Databricks ML Runtime sisältää valmiiksi pyspark, requests, pandas, mimetypes.
 
-# Yhteensopivuus Databricks Runtime 16.4 -tason NumPy 1.x:n kanssa.
-# Älä päivitä NumPy 2.x:ää — PySpark/Sparkin native bindings on käännetty 1.x:lle
-# ja moderni rembg/Pillow voivat aiheuttaa ABI-konfliktin ("dtype size changed").
-numpy<2.0
-
 # GS1 + SharePoint upload (jo käytössä)
 msal>=1.28.0
 requests>=2.31.0
 
-# Image processor (sharepoint_image_processor -paketti) — pinnatut versiot ABI-yhteensopiviksi
+# Image processor (sharepoint_image_processor -paketti)
+# rembg 2.0.50 ei ole saatavilla Python 3.12:lle (Runtime 16.4) — käytä 2.0.55+.
+# Tämä saattaa nostaa NumPy 2.x:ään; dbutils.library.restartPython() pip-asennuksen
+# jälkeen lataa uuden NumPy:n notebook-prosessiin niin että PySpark+rembg käyttävät
+# samaa versiota eikä ABI-konfliktia synny.
 aiohttp>=3.9.0,<4.0
-Pillow>=10.2.0,<11.0
-rembg==2.0.50
+Pillow>=10.2.0
+rembg>=2.0.55
 pydantic>=2.5.0,<3.0
 pydantic-settings>=2.1.0,<3.0
 typer>=0.9.0,<1.0
