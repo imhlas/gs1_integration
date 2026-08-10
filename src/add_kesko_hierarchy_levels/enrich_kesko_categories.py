@@ -114,10 +114,16 @@ def enrich_curated_with_kesko_categories(
     OWN_INFO_PROVIDER_NAME) puuttuu kategoria kaikilta tasoilta, kaikkiin kolmeen
     hierarkiasarakkeeseen kirjoitetaan OWN_PLACEHOLDER_CATEGORY, jotta kuvapipeline
     lataa tuotteen kuvan. Placeholder korvautuu automaattisesti heti kun oikea
-    kategoria löytyy. Kirjoita lopputulos Deltaan polkuun, joka tulee suoraan configista.
+    kategoria löytyy.
+
+    Placeholderia EI anneta tuotteelle joka löytyy suodattamattomasta Kesko-datasta
+    (KESKO_00 tai KESKO_02): sellaisen kategoria on rajattu pois tarkoituksella
+    EXCLUDE_L2/EXCLUDE_L3_BY_L2 -listoilla, eikä kyseessä ole luokittelematon uutuus.
+
+    Kirjoita lopputulos Deltaan polkuun, joka tulee suoraan configista.
 
     Palauttaa: {"rows_written": int, "rows_categorized": int, "rows_via_realtime": int,
-                "rows_via_own_placeholder": int}
+                "rows_via_own_placeholder": int, "rows_own_suppressed": int}
     """
     curated_table = curated_table or SQL_TABLE_CURATED_ITEMS
     output_path = output_path or CURATED_ITEMS_WITH_KESKO
@@ -136,7 +142,7 @@ def enrich_curated_with_kesko_categories(
 
     # Tyypit & deduplikointi (Kesko-puolella yksi rivi / GTIN)
     curated = curated_df.withColumn("GTIN", F.col("GTIN").cast(StringType()))
-    kesko = (
+    kesko_unfiltered = (
         kesko_df.select(
             F.col("GTIN").cast(StringType()).alias("GTIN"),
             F.col("PRODUCT_HIERARCHY_LEVEL_2").cast(StringType()).alias("PRODUCT_HIERARCHY_LEVEL_2"),
@@ -147,7 +153,7 @@ def enrich_curated_with_kesko_categories(
     )
 
     # --- Rajaa ei-halutut kategoriat pois ---
-    kesko = _filter_kesko_categories(kesko)
+    kesko = _filter_kesko_categories(kesko_unfiltered)
 
     # Fallback-avain: GTIN ilman etunollia
     curated = curated.withColumn("GTIN_NO_LEADING_ZEROS", _strip_leading_zeros_col(F.col("GTIN")))
@@ -155,7 +161,7 @@ def enrich_curated_with_kesko_categories(
     # --- 2) L0: realtime-join KESKO_02:n EAN-listalla ---
     print(">>> Haetaan realtime-kategoriat KESKO_02_weekly_sales -taulusta (n. 70-80s)")
     realtime_df = _load_realtime_kesko_lookup_from_kesko_02(spark, dbutils)
-    realtime = (
+    realtime_unfiltered = (
         realtime_df
         .select(
             F.col("EAN").cast(StringType()).alias("EAN"),
@@ -165,7 +171,38 @@ def enrich_curated_with_kesko_categories(
         )
         .dropDuplicates(["EAN"])  # jos sama EAN matchaa useaan L4-prefiksiin, ota ensimmäinen
     )
-    realtime = _filter_kesko_categories(realtime)
+    realtime = _filter_kesko_categories(realtime_unfiltered)
+
+    # --- Kesko-tuntemus SUODATTAMATTOMASTA datasta ---
+    # Tuote joka löytyy KESKO_00:sta tai KESKO_02:sta ei ole "luokittelematon uutuus",
+    # vaikka sen kategoria olisi suodattunut pois EXCLUDE_L2/EXCLUDE_L3_BY_L2 -listoilla.
+    # Näiltä placeholder estetään, jotta tietoinen kategoriarajaus ei kierry ohi
+    # omien tuotteiden kohdalla. Kun tällaisen tuotteen kategoria myöhemmin ilmestyy
+    # KESKO_00:aan, se pysyy edelleen rajauksen piirissä.
+    known_keys = (
+        kesko_unfiltered.select(F.col("GTIN").alias("KNOWN_KEY"))
+        .unionByName(realtime_unfiltered.select(F.col("EAN").alias("KNOWN_KEY")))
+        .where(F.col("KNOWN_KEY").isNotNull())
+        .dropDuplicates(["KNOWN_KEY"])
+        .withColumn("_KNOWN", F.lit(True))
+    )
+
+    curated = (
+        curated.alias("cu")
+        .join(known_keys.alias("ka"), F.col("cu.GTIN") == F.col("ka.KNOWN_KEY"), "left")
+        .select(F.col("cu.*"), F.col("ka._KNOWN").alias("_KNOWN_BY_GTIN"))
+    )
+    curated = (
+        curated.alias("cu")
+        .join(known_keys.alias("kb"), F.col("cu.GTIN_NO_LEADING_ZEROS") == F.col("kb.KNOWN_KEY"), "left")
+        .select(F.col("cu.*"), F.col("kb._KNOWN").alias("_KNOWN_BY_NLZ"))
+    )
+    curated = (
+        curated
+        .withColumn("KESKO_KNOWN",
+                    F.coalesce(F.col("_KNOWN_BY_GTIN"), F.col("_KNOWN_BY_NLZ"), F.lit(False)))
+        .drop("_KNOWN_BY_GTIN", "_KNOWN_BY_NLZ")
+    )
 
     l0 = curated.alias("c").join(
         F.broadcast(realtime).alias("k0"),
@@ -229,7 +266,10 @@ def enrich_curated_with_kesko_categories(
     is_own_product = (
         F.upper(F.trim(F.col("a.InfoProviderName"))) == F.lit(OWN_INFO_PROVIDER_NAME.upper())
     )
-    use_placeholder = is_own_product & kesko_l2.isNull()
+    # KESKO_KNOWN = tuote löytyy suodattamattomasta Kesko-datasta → sen kategoria on
+    # rajattu pois tarkoituksella, joten se ei saa placeholderia.
+    is_unknown_to_kesko = F.col("a.KESKO_KNOWN") == F.lit(False)
+    use_placeholder = is_own_product & kesko_l2.isNull() & is_unknown_to_kesko
 
     enriched = (
         joined
@@ -247,8 +287,15 @@ def enrich_curated_with_kesko_categories(
         )
         .drop("KESKO_L2_L0", "KESKO_L3_L0", "KESKO_L4_L0",
               "KESKO_L2_L1", "KESKO_L3_L1", "KESKO_L4_L1",
-              "KESKO_L2_L2", "KESKO_L3_L2", "KESKO_L4_L2")
+              "KESKO_L2_L2", "KESKO_L3_L2", "KESKO_L4_L2",
+              "KESKO_KNOWN")
     )
+
+    # Diagnostiikka: omat tuotteet joilta placeholder estettiin, koska Kesko tuntee
+    # tuotteen mutta sen kategoria on EXCLUDE-listalla.
+    rows_own_suppressed = joined.filter(
+        is_own_product & kesko_l2.isNull() & (F.col("a.KESKO_KNOWN") == F.lit(True))
+    ).count()
 
     # --- 5) Kirjoita Deltaan konfiguroituun polkuun ---
     writer = enriched.write.format("delta").mode(write_mode)
@@ -275,10 +322,12 @@ def enrich_curated_with_kesko_categories(
     print(f"Kesko-kategorioilla nimettyjä rivejä: {rows_categorized:,} ({rows_categorized/rows_written*100:.1f} %)")
     print(f"  niistä realtime-lähteestä (KESKO_02): {rows_via_realtime:,}")
     print(f"Omia tuotteita placeholder-kategorialla '{OWN_PLACEHOLDER_CATEGORY}': {rows_via_own_placeholder:,}")
+    print(f"  placeholder estetty (Kesko tuntee, kategoria rajattu pois): {rows_own_suppressed:,}")
 
     return {
         "rows_written": rows_written,
         "rows_categorized": rows_categorized,
         "rows_via_realtime": rows_via_realtime,
         "rows_via_own_placeholder": rows_via_own_placeholder,
+        "rows_own_suppressed": rows_own_suppressed,
     }
