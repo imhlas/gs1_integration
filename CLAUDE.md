@@ -36,7 +36,7 @@ kutsuu `src/`-paketin pipeline-funktioita.
 - [src/fetch_images/](src/fetch_images/) — kuvapipeline:
   - [image_extractor.py](src/fetch_images/image_extractor.py) — `ImageExtractor.fetch()` hakee kuvan ja päättelee tiedostopäätteen Content-Type/URL-päätteestä.
   - [delta_images.py](src/fetch_images/delta_images.py) — streamaa kuvarivit Curated/Gold-Deltasta (`BASE_UNIT_OR_EACH`, ei tyhjä URL, ei tyhjä L2-kategoria); `get_image_rows_iter` käyttää `toLocalIterator()`-streamia.
-  - [sharepoint_upload.py](src/fetch_images/sharepoint_upload.py) — `TokenManager` (MSAL client credentials + auto-refresh), `GraphClient` (retry 429/5xx, 401 → force-refresh), `process_batch_parallel` (`ThreadPoolExecutor`, `max_workers=12`). PUT kuvan polkuun → PATCH metatiedot (EAN, GS1/Kesko-kategoriat, BRAND, Tuote).
+  - [sharepoint_upload.py](src/fetch_images/sharepoint_upload.py) — `TokenManager` (MSAL client credentials + auto-refresh), `GraphClient` (retry 429/5xx, 401 → force-refresh), `process_batch_parallel` (`ThreadPoolExecutor`, `max_workers=12`). PUT kuvan polkuun → PATCH metatiedot (EAN, GS1/Kesko-kategoriat, BRAND, Tuote). Valinnainen `gtin_filter` rajaa käsittelyn annettuihin GTIN:eihin → yksittäisten tuotteiden kuvat voi päivittää ilman kirjaston tyhjennystä (kirjasto on litteä, tiedostonimi `{EAN}.{ext}` → PUT ylikirjoittaa).
   - [clean_sharepoint_library.py](src/fetch_images/clean_sharepoint_library.py) — `wipe_library` tyhjentää kirjaston (tai alikansion) Graphin DELETE-kutsuilla.
 
 **Apukirjastot**

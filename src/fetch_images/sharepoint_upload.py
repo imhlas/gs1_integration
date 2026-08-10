@@ -343,13 +343,19 @@ def process_batch_parallel(
     image_timeout_sec: int = 12,
     graph_timeout_sec: int = 25,
     progress_every: int = 500,   # tulosta väliraportti joka N rivi
-) -> None:
+    gtin_filter: Optional[Sequence[str]] = None,
+) -> dict:
     """
     Rinnakkaisajo:
       - streamaa rivit Deltasta (ei collect)
       - käsittelee säiepoolissa (kuva→PUT→PATCH)
       - ylikirjoittaa aina (idempotentti nimi {EAN}.{ext})
       - automaattinen tokenin uusinta + retry 429/5xx
+
+    gtin_filter: jos annettu, käsitellään vain nämä GTIN:t. Näin voi päivittää
+    yksittäisten tuotteiden kuvat ilman koko kirjaston tyhjennystä ja uudelleenlatausta.
+    Huom: suodatus tehdään GTIN.isin()-lausekkeella, joten pidä lista kohtuullisen
+    kokoisena (tuhansia, ei satojatuhansia).
     """
 
     # 0) Rakennetaan asiakkaat
@@ -437,10 +443,11 @@ def process_batch_parallel(
         return ok
 
     # 5) Streamaa rivit ja työnnä säiepooliin
-    print(f"Start: parallel upload with max_workers={max_workers}, limit={limit or 'ALL'}")
+    print(f"Start: parallel upload with max_workers={max_workers}, limit={limit or 'ALL'}, "
+          f"gtin_filter={len(gtin_filter) if gtin_filter else 'EI'}")
     futures = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for row in get_image_rows_iter(spark, curated_items_path, limit=limit):
+        for row in get_image_rows_iter(spark, curated_items_path, limit=limit, gtin_filter=gtin_filter):
             with lock:
                 counters["seen"] += 1
                 seen = counters["seen"]

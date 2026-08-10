@@ -251,7 +251,7 @@ def run_changes_pipeline_with_images(spark, dbutils, since_iso: str):
     stats = process_batch_parallel(
         spark,
         curated_items_path=CURATED_ITEMS_WITH_KESKO,
-        updated_gtins=updated_gtins,
+        gtin_filter=updated_gtins,
         limit=None,
         site_url=SITE_URL,
         tenant_id=TENANT_ID,
