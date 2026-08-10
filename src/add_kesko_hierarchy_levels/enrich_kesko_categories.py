@@ -34,6 +34,21 @@ EXCLUDE_L3_BY_L2 = {
     ],
 }
 
+# --- Omien tuotteiden placeholder-kategoria ---
+# Omat tuotteet tunnistetaan GS1:n InformationProviderOfTradeItem.PartyName -kentästä
+# (curated-sarake InfoProviderName).
+#
+# Jos omalle tuotteelle ei löydy Kesko-kategoriaa miltään tasolta (L0/L1/L2), sille
+# kirjoitetaan placeholder KAIKKIIN kolmeen hierarkiasarakkeeseen. Näin kuvapipeline
+# (delta_images._base_df vaatii ei-tyhjän PRODUCT_HIERARCHY_LEVEL_2) lataa tuotteen
+# kuvan ja se näkyy SharePointissa omana näkymänään.
+#
+# Placeholder korvautuu oikealla kategorialla automaattisesti seuraavassa ajossa heti
+# kun tuotteelle kertyy Kesko-myyntiä (L0/realtime) tai KESKO_00 päivittyy (L1/L2) —
+# coalesce-järjestys L0 → L1 → L2 → placeholder hoitaa korvautumisen.
+OWN_INFO_PROVIDER_NAME = "Lejos Oy"
+OWN_PLACEHOLDER_CATEGORY = "99 - Luokittelematon (oma tuote)"
+
 
 def _filter_kesko_categories(kesko_df):
     """Rajaa pois ei-halutut L2-kategoriat ja L2+L3-yhdistelmät."""
@@ -95,10 +110,14 @@ def enrich_curated_with_kesko_categories(
       1) viivästetty: suora curated.GTIN == KESKO_00.GTIN
       2) fallback: curated GTIN ilman etunollia == KESKO_00.GTIN
 
-    Coalesce-järjestys L0 → L1 → L2. Kirjoita lopputulos Deltaan polkuun, joka tulee
-    suoraan configista.
+    Coalesce-järjestys L0 → L1 → L2. Jos omalta tuotteelta (InfoProviderName ==
+    OWN_INFO_PROVIDER_NAME) puuttuu kategoria kaikilta tasoilta, kaikkiin kolmeen
+    hierarkiasarakkeeseen kirjoitetaan OWN_PLACEHOLDER_CATEGORY, jotta kuvapipeline
+    lataa tuotteen kuvan. Placeholder korvautuu automaattisesti heti kun oikea
+    kategoria löytyy. Kirjoita lopputulos Deltaan polkuun, joka tulee suoraan configista.
 
-    Palauttaa: {"rows_written": int, "rows_categorized": int, "rows_via_realtime": int}
+    Palauttaa: {"rows_written": int, "rows_categorized": int, "rows_via_realtime": int,
+                "rows_via_own_placeholder": int}
     """
     curated_table = curated_table or SQL_TABLE_CURATED_ITEMS
     output_path = output_path or CURATED_ITEMS_WITH_KESKO
@@ -189,20 +208,40 @@ def enrich_curated_with_kesko_categories(
         F.col("k2.PRODUCT_HIERARCHY_LEVEL_4").alias("KESKO_L4_L2"),
     )
 
-    # --- 5) Yhdistä: coalesce L0 → L1 → L2 ---
+    # --- 5) Yhdistä: coalesce L0 → L1 → L2 → placeholder (omat tuotteet) ---
     join_key_cols = ["Id"] if "Id" in l1.columns and "Id" in l2.columns else ["GTIN"]
 
+    joined = l1.alias("a").join(
+        l2.alias("b"),
+        on=[F.col(f"a.{k}") == F.col(f"b.{k}") for k in join_key_cols],
+        how="left",
+    )
+
+    # Kesko-kategoria tasoittain: L0 (realtime) → L1 (suora) → L2 (fallback)
+    kesko_l2 = F.coalesce(F.col("a.KESKO_L2_L0"), F.col("a.KESKO_L2_L1"), F.col("b.KESKO_L2_L2"))
+    kesko_l3 = F.coalesce(F.col("a.KESKO_L3_L0"), F.col("a.KESKO_L3_L1"), F.col("b.KESKO_L3_L2"))
+    kesko_l4 = F.coalesce(F.col("a.KESKO_L4_L0"), F.col("a.KESKO_L4_L1"), F.col("b.KESKO_L4_L2"))
+
+    # Placeholder annetaan vain omille tuotteille joilta puuttuu kategoria kaikilta
+    # tasoilta. Ehto on rivikohtainen (ei sarakekohtainen), jotta kaikki kolme saraketta
+    # täyttyvät aina yhdessä eikä synny puoliksi placeholder -rivejä.
+    # trim+upper suojaa InfoProviderName-kentän kirjoitusasun vaihtelulta.
+    is_own_product = (
+        F.upper(F.trim(F.col("a.InfoProviderName"))) == F.lit(OWN_INFO_PROVIDER_NAME.upper())
+    )
+    use_placeholder = is_own_product & kesko_l2.isNull()
+
     enriched = (
-        l1.alias("a")
-        .join(l2.alias("b"), on=[F.col(f"a.{k}") == F.col(f"b.{k}") for k in join_key_cols], how="left")
+        joined
         .select(
             F.col("a.*"),
-            F.coalesce(F.col("a.KESKO_L2_L0"), F.col("a.KESKO_L2_L1"), F.col("b.KESKO_L2_L2")).alias("PRODUCT_HIERARCHY_LEVEL_2"),
-            F.coalesce(F.col("a.KESKO_L3_L0"), F.col("a.KESKO_L3_L1"), F.col("b.KESKO_L3_L2")).alias("PRODUCT_HIERARCHY_LEVEL_3"),
-            F.coalesce(F.col("a.KESKO_L4_L0"), F.col("a.KESKO_L4_L1"), F.col("b.KESKO_L4_L2")).alias("PRODUCT_HIERARCHY_LEVEL_4"),
+            F.when(use_placeholder, F.lit(OWN_PLACEHOLDER_CATEGORY)).otherwise(kesko_l2).alias("PRODUCT_HIERARCHY_LEVEL_2"),
+            F.when(use_placeholder, F.lit(OWN_PLACEHOLDER_CATEGORY)).otherwise(kesko_l3).alias("PRODUCT_HIERARCHY_LEVEL_3"),
+            F.when(use_placeholder, F.lit(OWN_PLACEHOLDER_CATEGORY)).otherwise(kesko_l4).alias("PRODUCT_HIERARCHY_LEVEL_4"),
             F.when(F.col("a.KESKO_L2_L0").isNotNull(), F.lit("realtime"))
              .when(F.col("a.KESKO_L2_L1").isNotNull(), F.lit("kesko00_direct"))
              .when(F.col("b.KESKO_L2_L2").isNotNull(), F.lit("kesko00_no_leading_zeros"))
+             .when(use_placeholder, F.lit("own_placeholder"))
              .otherwise(F.lit(None).cast(StringType()))
              .alias("KESKO_CATEGORY_SOURCE"),
         )
@@ -219,19 +258,27 @@ def enrich_curated_with_kesko_categories(
 
     # --- 6) Raportti + 5 esimerkkiriviä ---
     rows_written = enriched.count()
+    # rows_categorized lasketaan vain OIKEISTA Kesko-kategorioista — placeholder
+    # jätetään ulkopuolelle, jotta mittari ei näytä paremmalta kuin tilanne on.
     rows_categorized = enriched.filter(
-        F.col("PRODUCT_HIERARCHY_LEVEL_2").isNotNull()
-        | F.col("PRODUCT_HIERARCHY_LEVEL_3").isNotNull()
-        | F.col("PRODUCT_HIERARCHY_LEVEL_4").isNotNull()
+        (
+            F.col("PRODUCT_HIERARCHY_LEVEL_2").isNotNull()
+            | F.col("PRODUCT_HIERARCHY_LEVEL_3").isNotNull()
+            | F.col("PRODUCT_HIERARCHY_LEVEL_4").isNotNull()
+        )
+        & ~F.coalesce(F.col("KESKO_CATEGORY_SOURCE") == F.lit("own_placeholder"), F.lit(False))
     ).count()
     rows_via_realtime = enriched.filter(F.col("KESKO_CATEGORY_SOURCE") == "realtime").count()
+    rows_via_own_placeholder = enriched.filter(F.col("KESKO_CATEGORY_SOURCE") == "own_placeholder").count()
 
     print(f"Deltaan kirjoitettu rivejä: {rows_written:,}")
     print(f"Kesko-kategorioilla nimettyjä rivejä: {rows_categorized:,} ({rows_categorized/rows_written*100:.1f} %)")
     print(f"  niistä realtime-lähteestä (KESKO_02): {rows_via_realtime:,}")
+    print(f"Omia tuotteita placeholder-kategorialla '{OWN_PLACEHOLDER_CATEGORY}': {rows_via_own_placeholder:,}")
 
     return {
         "rows_written": rows_written,
         "rows_categorized": rows_categorized,
         "rows_via_realtime": rows_via_realtime,
+        "rows_via_own_placeholder": rows_via_own_placeholder,
     }
