@@ -271,7 +271,10 @@ def enrich_curated_with_kesko_categories(
     is_unknown_to_kesko = F.col("a.KESKO_KNOWN") == F.lit(False)
     use_placeholder = is_own_product & kesko_l2.isNull() & is_unknown_to_kesko
 
-    enriched = (
+    # KESKO_KNOWN säilytetään vielä tässä välivaiheessa, jotta kaikki raportoitavat
+    # luvut saadaan laskettua yhdellä läpikäynnillä. Se pudotetaan ennen kirjoitusta,
+    # joten Gold-Deltan ja SQL-taulun skeema pysyy ennallaan.
+    enriched_full = (
         joined
         .select(
             F.col("a.*"),
@@ -287,15 +290,15 @@ def enrich_curated_with_kesko_categories(
         )
         .drop("KESKO_L2_L0", "KESKO_L3_L0", "KESKO_L4_L0",
               "KESKO_L2_L1", "KESKO_L3_L1", "KESKO_L4_L1",
-              "KESKO_L2_L2", "KESKO_L3_L2", "KESKO_L4_L2",
-              "KESKO_KNOWN")
+              "KESKO_L2_L2", "KESKO_L3_L2", "KESKO_L4_L2")
     )
 
-    # Diagnostiikka: omat tuotteet joilta placeholder estettiin, koska Kesko tuntee
-    # tuotteen mutta sen kategoria on EXCLUDE-listalla.
-    rows_own_suppressed = joined.filter(
-        is_own_product & kesko_l2.isNull() & (F.col("a.KESKO_KNOWN") == F.lit(True))
-    ).count()
+    # Spark on laiska: jokainen action ajaisi koko ketjun (2 JDBC-lukua + KESKO_02:n
+    # 70-80 s kysely + joinit) uudelleen. Cachetetaan kerran, jotta raportti ja
+    # kirjoitus jakavat saman lasketun tuloksen.
+    enriched_full = enriched_full.cache()
+
+    enriched = enriched_full.drop("KESKO_KNOWN")
 
     # --- 5) Kirjoita Deltaan konfiguroituun polkuun ---
     writer = enriched.write.format("delta").mode(write_mode)
@@ -303,23 +306,51 @@ def enrich_curated_with_kesko_categories(
         writer = writer.option("overwriteSchema", "true")
     writer.save(output_path)
 
-    # --- 6) Raportti + 5 esimerkkiriviä ---
-    rows_written = enriched.count()
+    # --- 6) Raportti: kaikki luvut YHDELLÄ läpikäynnillä ---
+    # Aiemmin nämä olivat erillisiä count()-kutsuja, joista jokainen ajoi koko
+    # laskentaketjun uudelleen. Nyt sama tulos yhdellä aggregaatilla cachetetusta
+    # välituloksesta.
+    _src = F.col("KESKO_CATEGORY_SOURCE")
+
     # rows_categorized lasketaan vain OIKEISTA Kesko-kategorioista — placeholder
     # jätetään ulkopuolelle, jotta mittari ei näytä paremmalta kuin tilanne on.
-    rows_categorized = enriched.filter(
+    _real_category = (
         (
             F.col("PRODUCT_HIERARCHY_LEVEL_2").isNotNull()
             | F.col("PRODUCT_HIERARCHY_LEVEL_3").isNotNull()
             | F.col("PRODUCT_HIERARCHY_LEVEL_4").isNotNull()
         )
-        & ~F.coalesce(F.col("KESKO_CATEGORY_SOURCE") == F.lit("own_placeholder"), F.lit(False))
-    ).count()
-    rows_via_realtime = enriched.filter(F.col("KESKO_CATEGORY_SOURCE") == "realtime").count()
-    rows_via_own_placeholder = enriched.filter(F.col("KESKO_CATEGORY_SOURCE") == "own_placeholder").count()
+        & ~F.coalesce(_src == F.lit("own_placeholder"), F.lit(False))
+    )
+    # Estetyt: oma tuote, ei kategoriaa (source NULL), mutta Kesko tuntee tuotteen.
+    _suppressed = (
+        (F.upper(F.trim(F.col("InfoProviderName"))) == F.lit(OWN_INFO_PROVIDER_NAME.upper()))
+        & _src.isNull()
+        & (F.col("KESKO_KNOWN") == F.lit(True))
+    )
 
+    def _cnt(cond):
+        return F.sum(F.when(cond, F.lit(1)).otherwise(F.lit(0)))
+
+    m = enriched_full.agg(
+        F.count(F.lit(1)).alias("rows_written"),
+        _cnt(_real_category).alias("rows_categorized"),
+        _cnt(_src == F.lit("realtime")).alias("rows_via_realtime"),
+        _cnt(_src == F.lit("own_placeholder")).alias("rows_via_own_placeholder"),
+        _cnt(_suppressed).alias("rows_own_suppressed"),
+    ).collect()[0]
+
+    rows_written = int(m["rows_written"] or 0)
+    rows_categorized = int(m["rows_categorized"] or 0)
+    rows_via_realtime = int(m["rows_via_realtime"] or 0)
+    rows_via_own_placeholder = int(m["rows_via_own_placeholder"] or 0)
+    rows_own_suppressed = int(m["rows_own_suppressed"] or 0)
+
+    enriched_full.unpersist()
+
+    _pct = (rows_categorized / rows_written * 100) if rows_written else 0.0
     print(f"Deltaan kirjoitettu rivejä: {rows_written:,}")
-    print(f"Kesko-kategorioilla nimettyjä rivejä: {rows_categorized:,} ({rows_categorized/rows_written*100:.1f} %)")
+    print(f"Kesko-kategorioilla nimettyjä rivejä: {rows_categorized:,} ({_pct:.1f} %)")
     print(f"  niistä realtime-lähteestä (KESKO_02): {rows_via_realtime:,}")
     print(f"Omia tuotteita placeholder-kategorialla '{OWN_PLACEHOLDER_CATEGORY}': {rows_via_own_placeholder:,}")
     print(f"  placeholder estetty (Kesko tuntee, kategoria rajattu pois): {rows_own_suppressed:,}")
